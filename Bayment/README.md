@@ -1,4 +1,8 @@
 A installer avant le build:
 
-npx expo install react-native-ble-manager react-native-ble-advertiser expo-dev-client
-npm install react-native-permissions
+npm install
+
+Pour faire le build: 
+
+eas login (Créer un compte si non existent)
+eas build --platform android --profile development
