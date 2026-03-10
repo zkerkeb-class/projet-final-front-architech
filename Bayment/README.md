@@ -1,6 +1,7 @@
 A installer avant le build:
 
 npm install
+npm install -g eas-cli
 
 Pour faire le build: 
 

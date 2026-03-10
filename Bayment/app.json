@@ -59,7 +59,8 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "2eb54507-b6bd-4e8b-9e91-86abd5b63a96"
+        "projectId": "2eb54507-b6bd-4e8b-9e91-86abd5b63a96",
+        "owner": "naus"
       }
     }
   }
