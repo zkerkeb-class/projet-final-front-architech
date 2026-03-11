@@ -8,9 +8,15 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
 
   return (
-    <View style={[ styles.container, { paddingTop: insets.top > 0 ? insets.top : 24 } ]}>
-      <Text style={styles.title}>📶 Bluetooth Payment</Text>
-      <Text style={styles.subtitle}>Choose your role:</Text>
+    <View style={[
+      styles.container,
+      {
+        paddingTop: insets.top > 0 ? insets.top : 24,
+        paddingBottom: insets.bottom > 0 ? insets.bottom : 24
+      }
+    ]}>
+      <Text style={styles.title}>Bayment</Text>
+      <Text style={styles.subtitle}>Connectez, Payez, Souriez !</Text>
 
       <TouchableOpacity
         style={[styles.button, styles.peripheralButton]}
@@ -27,17 +33,30 @@ export default function HomeScreen() {
         <Text style={styles.buttonText}>📤 Send Mode</Text>
         <Text style={styles.buttonSubtext}>Scan, connect & send "Hello World"</Text>
       </TouchableOpacity>
+
+      <View style={styles.footer}>
+        <TouchableOpacity style={[styles.button, styles.authButton]} onPress={() => router.push('/auth')}>
+          <Text style={styles.buttonText}>Connexion</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 24, backgroundColor: '#0f172a' },
-  title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
-  subtitle: { fontSize: 16, color: '#94a3b8', marginBottom: 32 },
+  title: { textAlign: 'center', fontSize: 54, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
+  subtitle: { textAlign: 'center', fontSize: 16, color: '#94a3b8', marginBottom: 32 },
   button: {
     padding: 14, borderRadius: 10,
     alignItems: 'center', marginBottom: 16
+  },
+  footer: {flex: 1, justifyContent: 'flex-end', },
+  authButton: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#334155',
+    marginBottom: 80
   },
   peripheralButton: { backgroundColor: '#8b5cf6' },
   centralButton: { backgroundColor: '#3b82f6' },
