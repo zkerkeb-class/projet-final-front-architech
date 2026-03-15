@@ -1,19 +1,60 @@
-import React, { useState, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Animated } from 'react-native';
-import { useRouter } from 'expo-router';
+import React, { useState, useRef, useEffect } from 'react';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Animated, ActivityIndicator, Alert } from 'react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Buffer } from 'buffer';
+
+const API_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
 
 export default function AuthScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
-  const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [linkSent, setLinkSent] = useState(false);
 
   const [toast, setToast] = useState<{ message: string, type: 'error' | 'success' } | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(-100)).current;
+
+  // Gérer le retour du Deep Link (le token est dans les params de l'URL)
+  useEffect(() => {
+    if (params.token) {
+      handleTokenReceived(params.token as string);
+    }
+  }, [params.token]);
+
+  const handleTokenReceived = async (token: string) => {
+    try {
+      setLoading(true);
+      console.log('Token reçu via Deep Link:', token);
+
+      // On décode sommairement le JWT pour extraire l'email
+      let userEmail = '';
+      try {
+        const payload = token.split('.')[1];
+        const decoded = JSON.parse(Buffer.from(payload, 'base64').toString());
+        userEmail = decoded.mail;
+      } catch (e) {
+        console.log("Erreur décodage token:", e);
+      }
+
+      showToast('Connexion réussie !', 'success');
+
+      // Attendre un peu avant de rediriger
+      setTimeout(() => {
+        router.replace({
+          pathname: '/central',
+          params: { userEmail: userEmail }
+        });
+      }, 1500);
+    } catch (error) {
+      showToast('Erreur lors de la connexion.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const showToast = (message: string, type: 'error' | 'success') => {
     setToast({ message, type });
@@ -31,21 +72,49 @@ export default function AuthScreen() {
     }, 3000);
   };
 
-  const handleAuth = () => {
-    if (!email || !password) {
-      showToast('Veuillez remplir tous les champs.', 'error');
-      return;
-    }
-    if (!isLogin && password !== confirmPassword) {
-      showToast('Les mots de passe ne correspondent pas.', 'error');
+  const handleLogin = async () => {
+    if (!email) {
+      showToast('Veuillez entrer votre adresse e-mail.', 'error');
       return;
     }
 
-    console.log(isLogin ? 'Connexion' : 'Inscription', { email, password });
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      showToast('Adresse e-mail invalide.', 'error');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      console.log(`Tentative d'envoi d'un lien de connexion à : ${API_URL}/auth/login`);
+      const response = await fetch(`${API_URL}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ mail: email.toLowerCase() }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setLinkSent(true);
+        showToast('Lien de connexion envoyé !', 'success');
+      } else {
+        showToast(data.message || 'Une erreur est survenue.', 'error');
+      }
+    } catch (error) {
+      console.error('Erreur Fetch:', error);
+      showToast('Impossible de contacter le serveur.', 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <View style={styles.container}>
+      {/* Custom Toast */}
       {toast && (
         <Animated.View
           style={[
@@ -65,7 +134,7 @@ export default function AuthScreen() {
       )}
 
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'android' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
       >
         <ScrollView
@@ -82,61 +151,61 @@ export default function AuthScreen() {
           </TouchableOpacity>
 
           <Text style={styles.title}>Bayment</Text>
-          <Text style={styles.subtitle}>
-            {isLogin ? 'Connectez-vous pour continuer' : 'Créez votre compte pour commencer'}
-          </Text>
 
-          <View style={styles.form}>
-            <Text style={styles.label}>Adresse e-mail</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Entrez votre adresse e-mail"
-              placeholderTextColor="#64748b"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              value={email}
-              onChangeText={setEmail}
-            />
+          {!linkSent ? (
+            <>
+              <Text style={styles.subtitle}>
+                Entrez votre adresse email pour recevoir un lien de connexion.
+              </Text>
 
-            <Text style={styles.label}>Mot de passe</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Saisissez votre mot de passe"
-              placeholderTextColor="#64748b"
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-            />
-
-            {!isLogin && (
-              <>
-                <Text style={styles.label}>Confirmer le mot de passe</Text>
+              <View style={styles.form}>
+                <Text style={styles.label}>Adresse e-mail</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Confirmez votre mot de passe"
+                  placeholder="Entrer votre adresse e-mail"
                   placeholderTextColor="#64748b"
-                  secureTextEntry
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  value={email}
+                  onChangeText={setEmail}
+                  editable={!loading}
                 />
-              </>
-            )}
 
-            <TouchableOpacity style={styles.button} onPress={handleAuth}>
-              <Text style={styles.buttonText}>
-                {isLogin ? 'Se connecter' : "Ouvrir un compte"}
+                <TouchableOpacity
+                  style={[styles.button, loading && { opacity: 0.7 }]}
+                  onPress={handleLogin}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.buttonText}>Recevoir un lien de connexion</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <View style={styles.successContainer}>
+              <View style={styles.iconCircle}>
+                <Text style={styles.successIcon}>📧</Text>
+              </View>
+              <Text style={styles.successTitle}>Lien envoyé !</Text>
+              <Text style={styles.successSubtitle}>
+                Nous avons envoyé un lien de connexion à : {"\n"}
+                <Text style={styles.emailHighlight}>{email}</Text>
               </Text>
-            </TouchableOpacity>
+              <Text style={styles.instruction}>
+                Cliquez sur le lien dans l'email depuis cet appareil pour vous connecter.
+              </Text>
 
-            <TouchableOpacity
-              style={styles.switchButton}
-              onPress={() => setIsLogin(!isLogin)}
-            >
-              <Text style={styles.switchText}>
-                {isLogin ? "Pas encore de compte ? S'inscrire" : "Déjà un compte ? Se connecter"}
-              </Text>
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity
+                style={styles.retryButton}
+                onPress={() => setLinkSent(false)}
+              >
+                <Text style={styles.retryText}>Utiliser une autre adresse e-mail</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -149,7 +218,7 @@ const styles = StyleSheet.create({
   backButton: { marginBottom: 16 },
   backText: { color: '#3b82f6', fontSize: 16 },
   title: { fontSize: 32, fontWeight: 'bold', color: '#f8fafc', textAlign: 'center', marginBottom: 8 },
-  subtitle: { fontSize: 16, color: '#94a3b8', textAlign: 'center', marginBottom: 40 },
+  subtitle: { fontSize: 16, color: '#94a3b8', textAlign: 'center', marginBottom: 40, paddingHorizontal: 10 },
   form: { width: '100%' },
   label: { color: '#e2e8f0', fontSize: 14, marginBottom: 8, fontWeight: '500' },
   input: {
@@ -170,9 +239,23 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  switchButton: { marginTop: 20, alignItems: 'center' },
-  switchText: { color: '#3b82f6', fontSize: 14 },
 
+  // Success state styles
+  successContainer: { alignItems: 'center', marginTop: 20 },
+  iconCircle: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: '#1e293b', justifyContent: 'center', alignItems: 'center',
+    marginBottom: 24, borderWidth: 1, borderColor: '#334155'
+  },
+  successIcon: { fontSize: 40 },
+  successTitle: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 16 },
+  successSubtitle: { fontSize: 16, color: '#94a3b8', textAlign: 'center', lineHeight: 24 },
+  emailHighlight: { color: '#3b82f6', fontWeight: 'bold' },
+  instruction: { fontSize: 14, color: '#64748b', textAlign: 'center', marginTop: 24, fontStyle: 'italic' },
+  retryButton: { marginTop: 40 },
+  retryText: { color: '#3b82f6', fontSize: 14 },
+
+  // Toast Styles
   toast: {
     position: 'absolute',
     left: 20,

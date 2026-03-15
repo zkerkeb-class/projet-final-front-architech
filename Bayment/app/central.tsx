@@ -10,7 +10,7 @@ import BleManager, {
 } from 'react-native-ble-manager';
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import { request, PERMISSIONS } from 'react-native-permissions';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -27,10 +27,13 @@ const mockDevices: Peripheral[] = [
 
 export default function CentralScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const [devices, setDevices] = useState<Peripheral[]>([]);
   const [connectedDevice, setConnectedDevice] = useState<string | null>(null);
   const [status, setStatus] = useState('Idle');
+
+  const userEmail = params.userEmail as string;
 
   useEffect(() => {
     if (isEmulator) {
@@ -140,9 +143,17 @@ export default function CentralScreen() {
 
   return (
     <View style={[ styles.container, { paddingTop: insets.top > 0 ? insets.top : 24 } ]}>
-      <TouchableOpacity onPress={() => router.back()}>
-        <Text style={styles.back}>← Back</Text>
-      </TouchableOpacity>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Text style={styles.back}>← Back</Text>
+        </TouchableOpacity>
+
+        {userEmail && (
+          <View style={styles.userBadge}>
+            <Text style={styles.userEmail}>{userEmail}</Text>
+          </View>
+        )}
+      </View>
 
       <Text style={styles.title}>📤 Send Mode</Text>
 
@@ -190,9 +201,28 @@ export default function CentralScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 24, backgroundColor: '#0f172a' },
-  title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8
+  },
+  userBadge: {
+    backgroundColor: '#1e293b',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  userEmail: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 8 },
   status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
-  back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
+  back: { color: '#3b82f6', fontSize: 16 },
   button: {
     backgroundColor: '#3b82f6', padding: 14,
     borderRadius: 10, alignItems: 'center', marginBottom: 16
