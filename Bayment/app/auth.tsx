@@ -1,10 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Animated, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Animated, ActivityIndicator } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Buffer } from 'buffer';
-
-const API_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
+import { requestMagicLink } from '../services/api';
 
 export default function AuthScreen() {
   const router = useRouter();
@@ -18,7 +17,6 @@ export default function AuthScreen() {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(-100)).current;
 
-  // Gérer le retour du Deep Link (le token est dans les params de l'URL)
   useEffect(() => {
     if (params.token) {
       handleTokenReceived(params.token as string);
@@ -28,9 +26,7 @@ export default function AuthScreen() {
   const handleTokenReceived = async (token: string) => {
     try {
       setLoading(true);
-      console.log('Token reçu via Deep Link:', token);
 
-      // On décode sommairement le JWT pour extraire l'email
       let userEmail = '';
       try {
         const payload = token.split('.')[1];
@@ -42,7 +38,6 @@ export default function AuthScreen() {
 
       showToast('Connexion réussie !', 'success');
 
-      // Attendre un peu avant de rediriger
       setTimeout(() => {
         router.replace({
           pathname: '/central',
@@ -87,26 +82,12 @@ export default function AuthScreen() {
     setLoading(true);
 
     try {
-      console.log(`Tentative d'envoi d'un lien de connexion à : ${API_URL}/auth/login`);
-      const response = await fetch(`${API_URL}/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ mail: email.toLowerCase() }),
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        setLinkSent(true);
-        showToast('Lien de connexion envoyé !', 'success');
-      } else {
-        showToast(data.message || 'Une erreur est survenue.', 'error');
-      }
-    } catch (error) {
-      console.error('Erreur Fetch:', error);
-      showToast('Impossible de contacter le serveur.', 'error');
+      // ← replaced the entire fetch block with this one line
+      await requestMagicLink(email.toLowerCase());
+      setLinkSent(true);
+      showToast('Lien de connexion envoyé !', 'success');
+    } catch (error: any) {
+      showToast(error.message || 'Une erreur est survenue.', 'error');
     } finally {
       setLoading(false);
     }
@@ -114,7 +95,6 @@ export default function AuthScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Custom Toast */}
       {toast && (
         <Animated.View
           style={[
@@ -239,8 +219,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-
-  // Success state styles
   successContainer: { alignItems: 'center', marginTop: 20 },
   iconCircle: {
     width: 80, height: 80, borderRadius: 40,
@@ -254,8 +232,6 @@ const styles = StyleSheet.create({
   instruction: { fontSize: 14, color: '#64748b', textAlign: 'center', marginTop: 24, fontStyle: 'italic' },
   retryButton: { marginTop: 40 },
   retryText: { color: '#3b82f6', fontSize: 14 },
-
-  // Toast Styles
   toast: {
     position: 'absolute',
     left: 20,
