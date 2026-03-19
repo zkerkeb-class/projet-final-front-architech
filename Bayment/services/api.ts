@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 const API_URL = 'http://172.20.10.3:3000';  
 
 export const requestMagicLink = async (mail: string) => {
+  console.log(API_URL);
   const response = await fetch(`${API_URL}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

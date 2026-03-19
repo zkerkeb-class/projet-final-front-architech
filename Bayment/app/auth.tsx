@@ -16,7 +16,7 @@ export default function AuthScreen() {
   const [toast, setToast] = useState<{ message: string, type: 'error' | 'success' } | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(-100)).current;
-
+  console.log()
   useEffect(() => {
     if (params.token) {
       handleTokenReceived(params.token as string);
