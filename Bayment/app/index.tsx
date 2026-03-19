@@ -43,17 +43,17 @@ export default function HomeScreen() {
 
       <TouchableOpacity
         style={[styles.button, styles.peripheralButton]}
-        onPress={() => router.push('/peripheral')}
+        onPress={() => router.push('/buyer')}
       >
-        <Text style={styles.buttonText}>📡 Receive Mode</Text>
-        <Text style={styles.buttonSubtext}>Advertise & wait for a message</Text>
+        <Text style={styles.buttonText}>📡 Buyer Mode</Text>
+        <Text style={styles.buttonSubtext}>Search for transaction</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
         style={[styles.button, styles.centralButton]}
-        onPress={() => router.push('/central')}
+        onPress={() => router.push('/vendor')}
       >
-        <Text style={styles.buttonText}>📤 Send Mode</Text>
+        <Text style={styles.buttonText}>📤  Vendor Mode</Text>
         <Text style={styles.buttonSubtext}>Scan, connect & send "Hello World"</Text>
       </TouchableOpacity>
     </View>
