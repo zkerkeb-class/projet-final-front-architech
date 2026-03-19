@@ -7,6 +7,7 @@ import { Buffer } from 'buffer';
 const API_URL = Platform.OS === 'android' ? 'http://10.0.2.2:3000' : 'http://localhost:3000';
 
 export default function AuthScreen() {
+  //Voir Library zustand pr gérer state + facilement
   const router = useRouter();
   const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
