@@ -1,38 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity,
-  StyleSheet, Alert, ActivityIndicator
+  StyleSheet, Alert, Modal
 } from 'react-native';
 import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-classic';
 import { useRouter } from 'expo-router';
-import { getUserById } from '../services/api';
 import { useUser } from '../context/UserContext';
+import UserCard from '../components/UserCard';
+import { updateAccountMoney, getUserById } from '../services/api';
 
 export default function BuyerScreen() {
   const router = useRouter();
   const { user, setUser } = useUser();
-  const [loadingUser, setLoadingUser] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [status, setStatus] = useState('Ready to wait for a vendor');
+  const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [pendingAmount, setPendingAmount] = useState<number>(0);
   const subscriptionRef = useRef<any>(null);
 
-  // Refresh balance using user.id from context
-  const refreshBalance = async () => {
-    if (!user) return;
-    setLoadingUser(true);
-    try {
-      const data = await getUserById(user.id);
-      setUser(data);
-    } catch (err: any) {
-      Alert.alert('Error', err.message);
-    } finally {
-      setLoadingUser(false);
-    }
-  };
-
   useEffect(() => {
-    // Refresh balance when screen loads
-    refreshBalance();
     return () => stopListening();
   }, []);
 
@@ -46,18 +33,74 @@ export default function BuyerScreen() {
 
       const device = await RNBluetoothClassic.accept({ delimiter: '\n' });
       if (device) {
-        setStatus(`Connected to ${device.name}!`);
-        const dataSubscription = device.onDataReceived((data: any) => {
+        setConnectedDevice(device);
+        setStatus(`Connected to ${device.name}! Waiting for payment request...`);
+
+        subscriptionRef.current = device.onDataReceived((data: any) => {
           const message = data.data.trim();
-          Alert.alert('📨 Message Received!', message);
-          setStatus(`Received: ${message}`);
+          handleVendorMessage(message, device);
         });
-        subscriptionRef.current = dataSubscription;
       }
     } catch (err: any) {
       setStatus(`Failed: ${err.message}`);
       setIsListening(false);
     }
+  };
+
+  const handleVendorMessage = (message: string, device: BluetoothDevice) => {
+    if (message.startsWith('AMOUNT:')) {
+      const amount = parseFloat(message.replace('AMOUNT:', ''));
+      setPendingAmount(amount);
+      setStatus(`💶 Incoming transaction: ${amount} €`);
+
+      // Wait 2 seconds then check balance
+      setTimeout(() => {
+        checkAndProcessPayment(amount, device);
+      }, 2000);
+    }
+  };
+
+  const checkAndProcessPayment = (amount: number, device: BluetoothDevice) => {
+    // Use local balance — no API call
+    const currentBalance = user!.account_money;
+
+    if (currentBalance < amount) {
+      // Not enough funds
+      device.write('INSUFFICIENT\n');
+      Alert.alert(
+        '❌ Insufficient Balance',
+        `You currently have ${currentBalance} € but the transaction's amount is ${amount} €`
+      );
+      setStatus('📡 Waiting for vendor connection...');
+    } else {
+      // Enough funds — show confirmation modal
+      setConfirmModalVisible(true);
+    }
+  };
+
+  const handleAccept = async () => {
+    setConfirmModalVisible(false);
+    try {
+      // Deduct from buyer's account
+      await updateAccountMoney(user!.id, -pendingAmount);
+      const updatedUser = await getUserById(user!.id);
+      setUser(updatedUser);
+
+      // Notify vendor
+      await connectedDevice?.write('ACCEPTED\n');
+
+      setStatus('📡 Waiting for vendor connection...');
+      Alert.alert('✅ Transaction accepted !', `${pendingAmount} € were debited from your account.`);
+    } catch (err: any) {
+      Alert.alert('Erreur', err.message);
+    }
+  };
+
+  const handleRefuse = async () => {
+    setConfirmModalVisible(false);
+    await connectedDevice?.write('REFUSED\n');
+    setStatus('📡 Waiting for vendor connection...');
+    Alert.alert('❌ Cancelled Transaction', 'You refused the transaction.');
   };
 
   const stopListening = () => {
@@ -71,6 +114,13 @@ export default function BuyerScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Username top right */}
+      {user && (
+        <View style={styles.header}>
+          <Text style={styles.username}>👤 {user.username}</Text>
+        </View>
+      )}
+
       <TouchableOpacity onPress={() => { stopListening(); router.back(); }}>
         <Text style={styles.back}>← Back</Text>
       </TouchableOpacity>
@@ -78,21 +128,8 @@ export default function BuyerScreen() {
       <Text style={styles.title}>🛍️ Buyer Mode</Text>
       <Text style={styles.status}>Status: {status}</Text>
 
-      {/* Balance card — always shown since user comes from context */}
-      {loadingUser ? (
-        <ActivityIndicator color="#3b82f6" style={{ marginBottom: 16 }} />
-      ) : (
-        <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>👤 {user?.username}</Text>
-          <Text style={styles.balanceLabel}>💰 My Balance:</Text>
-          <Text style={styles.balanceAmount}>{user?.account_money} €</Text>
-          <TouchableOpacity onPress={refreshBalance} style={styles.refreshButton}>
-            <Text style={styles.refreshText}>🔄 Refresh</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      <UserCard compact={true} />
 
-      {/* Listen button */}
       {!isListening ? (
         <TouchableOpacity
           style={[styles.button, styles.peripheralButton]}
@@ -108,12 +145,62 @@ export default function BuyerScreen() {
           <Text style={styles.buttonText}>Stop Listening</Text>
         </TouchableOpacity>
       )}
+
+      {/* Payment confirmation modal */}
+      <Modal
+        visible={confirmModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => handleRefuse()}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>💶 Validate transaction</Text>
+
+            <View style={styles.amountContainer}>
+              <Text style={styles.amountLabel}>Amount</Text>
+              <Text style={styles.amountValue}>{pendingAmount} €</Text>
+            </View>
+
+            <View style={styles.balanceContainer}>
+              <View style={styles.balanceRow}>
+                <Text style={styles.balanceLabel}>Current balance</Text>
+                <Text style={styles.balanceValue}>{user?.account_money} €</Text>
+              </View>
+              <View style={styles.balanceRow}>
+                <Text style={styles.balanceLabel}>Balance after payment</Text>
+                <Text style={[styles.balanceValue, styles.balanceAfter]}>
+                  {(user?.account_money ?? 0) - pendingAmount} €
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.refuseButton]}
+                onPress={handleRefuse}
+              >
+                <Text style={styles.modalButtonText}>❌ Decline</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.acceptButton]}
+                onPress={handleAccept}
+              >
+                <Text style={styles.modalButtonText}>✅ Accept</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 24, backgroundColor: '#0f172a' },
+  header: { position: 'absolute', top: 48, right: 24 },
+  username: { color: '#94a3b8', fontSize: 14, fontWeight: '600' },
   title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
   status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
   back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
@@ -124,12 +211,34 @@ const styles = StyleSheet.create({
   peripheralButton: { backgroundColor: '#8b5cf6' },
   stopButton: { backgroundColor: '#ef4444' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  balanceCard: {
-    backgroundColor: '#1e293b', padding: 20,
-    borderRadius: 10, marginBottom: 16, alignItems: 'center'
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end'
   },
-  balanceLabel: { color: '#94a3b8', fontSize: 14, marginBottom: 4 },
-  balanceAmount: { color: '#10b981', fontSize: 36, fontWeight: 'bold' },
-  refreshButton: { marginTop: 8 },
-  refreshText: { color: '#3b82f6', fontSize: 13 },
+  modalContent: {
+    backgroundColor: '#1e293b', borderTopLeftRadius: 24,
+    borderTopRightRadius: 24, padding: 32
+  },
+  modalTitle: {
+    color: '#f8fafc', fontSize: 20,
+    fontWeight: 'bold', marginBottom: 24, textAlign: 'center'
+  },
+  amountContainer: {
+    backgroundColor: '#0f172a', borderRadius: 12,
+    padding: 20, alignItems: 'center', marginBottom: 16
+  },
+  amountLabel: { color: '#94a3b8', fontSize: 14, marginBottom: 8 },
+  amountValue: { color: '#f8fafc', fontSize: 48, fontWeight: 'bold' },
+  balanceContainer: {
+    backgroundColor: '#0f172a', borderRadius: 12,
+    padding: 16, marginBottom: 24, gap: 12
+  },
+  balanceRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  balanceLabel: { color: '#94a3b8', fontSize: 14 },
+  balanceValue: { color: '#f8fafc', fontSize: 14, fontWeight: '600' },
+  balanceAfter: { color: '#ef4444' },
+  modalButtons: { flexDirection: 'row', gap: 12 },
+  modalButton: { flex: 1, padding: 16, borderRadius: 12, alignItems: 'center' },
+  refuseButton: { backgroundColor: '#ef4444' },
+  acceptButton: { backgroundColor: '#10b981' },
+  modalButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 });

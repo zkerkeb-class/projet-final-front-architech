@@ -38,20 +38,20 @@ export default function AuthScreen() {
         const decoded = JSON.parse(Buffer.from(payload, 'base64').toString());
         userEmail = decoded.mail;
       } catch (e) {
-        console.log("Erreur décodage token:", e);
+        console.log("Token decoding error:", e);
       }
 
       // Fetch user by email and store in context
       const userData = await getUserByEmail(userEmail);
       setUser(userData);
 
-      showToast('Connexion réussie !', 'success');
+      showToast('Connection successful !', 'success');
 
       setTimeout(() => {
         router.replace('/');
       }, 1500);
     } catch (error) {
-      showToast('Erreur lors de la connexion.', 'error');
+      showToast('Error while connecting.', 'error');
     } finally {
       setLoading(false);
     }
@@ -76,13 +76,13 @@ export default function AuthScreen() {
 
   const handleLogin = async () => {
     if (!email) {
-      showToast('Veuillez entrer votre adresse e-mail.', 'error');
+      showToast('Enter your e-mail address.', 'error');
       return;
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
-      showToast('Adresse e-mail invalide.', 'error');
+      showToast('Unvalide e-mail address.', 'error');
       return;
     }
 
@@ -92,9 +92,9 @@ export default function AuthScreen() {
       // ← replaced the entire fetch block with this one line
       await requestMagicLink(email.toLowerCase());
       setLinkSent(true);
-      showToast('Lien de connexion envoyé !', 'success');
+      showToast('Magic link send! Please check your mailbox', 'success');
     } catch (error: any) {
-      showToast(error.message || 'Une erreur est survenue.', 'error');
+      showToast(error.message || 'Something showed up.', 'error');
     } finally {
       setLoading(false);
     }
@@ -142,14 +142,14 @@ export default function AuthScreen() {
           {!linkSent ? (
             <>
               <Text style={styles.subtitle}>
-                Entrez votre adresse email pour recevoir un lien de connexion.
+                Enter your e-mail address to receive your Magic Link.
               </Text>
 
               <View style={styles.form}>
-                <Text style={styles.label}>Adresse e-mail</Text>
+                <Text style={styles.label}>E-mail address</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Entrer votre adresse e-mail"
+                  placeholder="Enter your e-mail address"
                   placeholderTextColor="#64748b"
                   keyboardType="email-address"
                   autoCapitalize="none"
@@ -166,7 +166,7 @@ export default function AuthScreen() {
                   {loading ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
-                    <Text style={styles.buttonText}>Recevoir un lien de connexion</Text>
+                    <Text style={styles.buttonText}>Get your Magic Link</Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -176,20 +176,20 @@ export default function AuthScreen() {
               <View style={styles.iconCircle}>
                 <Text style={styles.successIcon}>📧</Text>
               </View>
-              <Text style={styles.successTitle}>Lien envoyé !</Text>
+              <Text style={styles.successTitle}>Magic Link sent !</Text>
               <Text style={styles.successSubtitle}>
-                Nous avons envoyé un lien de connexion à : {"\n"}
+                A Magic Link has been sent to : {"\n"}
                 <Text style={styles.emailHighlight}>{email}</Text>
               </Text>
               <Text style={styles.instruction}>
-                Cliquez sur le lien dans l'email depuis cet appareil pour vous connecter.
+                Click on the link in the e-mail from this device to connect.
               </Text>
 
               <TouchableOpacity
                 style={styles.retryButton}
                 onPress={() => setLinkSent(false)}
               >
-                <Text style={styles.retryText}>Utiliser une autre adresse e-mail</Text>
+                <Text style={styles.retryText}>Use another e-mail address</Text>
               </TouchableOpacity>
             </View>
           )}

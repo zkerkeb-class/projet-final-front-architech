@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Platform, PermissionsAndroid 
 import { useRouter } from 'expo-router';
 import { request, PERMISSIONS } from 'react-native-permissions';
 import { useUser } from '../context/UserContext';
+import UserCard from '../components/UserCard';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -27,28 +28,21 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>📶 Bayment</Text>
 
-      {/* Show user info if logged in */}
-      {user ? (
-        <View style={styles.userCard}>
-          <Text style={styles.userText}>👤 {user.username}</Text>
-          <Text style={styles.userText}>📧 {user.mail}</Text>
-          <Text style={styles.userText}>💰 {user.account_money} €</Text>
+      {/* Username in top right corner */}
+      {user && (
+        <View style={styles.header}>
+          <Text style={styles.username}>👤 {user.username}</Text>
         </View>
-      ) : (
-        // Only show login button if not connected
-        <TouchableOpacity
-          style={styles.loginButton}
-          onPress={() => router.push('/auth')}
-        >
-          <Text style={styles.buttonText}>🔐 Se connecter</Text>
-        </TouchableOpacity>
       )}
 
-      {/* Only show these buttons if logged in */}
-      {user && (
+      <Text style={styles.title}>📶 Bayment</Text>
+
+      {user ? (
         <>
+          {/* Full user card with add/withdraw buttons */}
+          <UserCard compact={false} />
+
           <TouchableOpacity
             style={[styles.button, styles.buyerButton]}
             onPress={() => router.push('/buyer')}
@@ -65,6 +59,13 @@ export default function HomeScreen() {
             <Text style={styles.buttonSubtext}>Scan for buyer & send payment request</Text>
           </TouchableOpacity>
         </>
+      ) : (
+        <TouchableOpacity
+          style={styles.loginButton}
+          onPress={() => router.push('/auth')}
+        >
+          <Text style={styles.buttonText}>🔐 Connect</Text>
+        </TouchableOpacity>
       )}
     </View>
   );
@@ -72,12 +73,9 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 24, backgroundColor: '#0f172a', justifyContent: 'center' },
+  header: { position: 'absolute', top: 48, right: 24 },
+  username: { color: '#94a3b8', fontSize: 14, fontWeight: '600' },
   title: { fontSize: 28, fontWeight: 'bold', color: '#f8fafc', marginBottom: 24, textAlign: 'center' },
-  userCard: {
-    backgroundColor: '#1e293b', padding: 16,
-    borderRadius: 12, marginBottom: 32, gap: 8
-  },
-  userText: { color: '#94a3b8', fontSize: 14 },
   loginButton: {
     backgroundColor: '#3b82f6', padding: 16,
     borderRadius: 12, alignItems: 'center', marginBottom: 16
