@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-const API_URL = 'http://172.20.10.3:3000';  
+const API_URL = 'http://54.175.240.74:3000';  
 
 export const requestMagicLink = async (mail: string) => {
   console.log(API_URL);
