@@ -16,7 +16,7 @@ export default function BuyerScreen() {
   const insets = useSafeAreaInsets();
   const { user, setUser } = useUser();
   const [isListening, setIsListening] = useState(false);
-  const [status, setStatus] = useState('Prêt à attendre un vendeur');
+  const [status, setStatus] = useState('Prêt à attendre un acheteur');//C censé etre vendeur
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [pendingAmount, setPendingAmount] = useState<number>(0);
@@ -87,7 +87,7 @@ export default function BuyerScreen() {
     if (currentBalance < amount) {
       device.write('INSUFFICIENT\n');
       Alert.alert('Solde insuffisant', `Vous avez ${currentBalance} € mais la transaction est de ${amount} €`);
-      setStatus('Attente de connexion vendeur...');
+      setStatus('Attente de connexion acheteur...');//a remplacé par vendeur
     } else {
       setConfirmModalVisible(true);
     }
@@ -114,7 +114,7 @@ export default function BuyerScreen() {
       } catch {}
 
       await connectedDevice?.write('ACCEPTED\n');
-      setStatus('Attente de connexion vendeur...');
+      setStatus('Attente de connexion acheteur...');//a remplacé par vendeur
       Alert.alert('Transaction acceptée !', `${pendingAmount} € débités. Solde UTXO mis à jour.`);
       setPendingFragment(null);
     } catch (err: any) {
@@ -126,7 +126,7 @@ export default function BuyerScreen() {
     setConfirmModalVisible(false);
     await connectedDevice?.write('REFUSED\n');
     setPendingFragment(null);
-    setStatus('Attente de connexion vendeur...');
+    setStatus('Attente de connexion acheteur...');//a remplacé par vendeur
     Alert.alert('Transaction refusée', 'Vous avez annulé le paiement.');
   };
 
@@ -154,7 +154,7 @@ export default function BuyerScreen() {
       </TouchableOpacity>
 
       <View style={styles.titleSection}>
-        <Text style={styles.title}>Mode Acheteur ↘</Text>
+        <Text style={styles.title}>Mode Vendeur ↘</Text>{/*a remplacé par acheteur*/}
         <Text style={styles.statusText}>{status}</Text>
       </View>
 
@@ -169,7 +169,7 @@ export default function BuyerScreen() {
       <View style={styles.actionSection}>
         {!isListening ? (
           <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={startListening}>
-            <Text style={styles.buttonText}>Attendre un vendeur</Text>
+            <Text style={styles.buttonText}>Attendre un acheteur</Text>{/*a remplacé par vendeur*/}
           </TouchableOpacity>
         ) : (
           <TouchableOpacity style={[styles.button, styles.stopButton]} onPress={stopListening}>

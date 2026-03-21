@@ -136,21 +136,21 @@ export default function VendorScreen() {
       amountRef.current = 0;
       setTxStatus('connected');
       setStatus(`Transaction réussie avec ${connectedDevice?.name}`);
-      Alert.alert('Paiement reçu !', `L'acheteur vous a versé ${parsedAmount} €`);
+      Alert.alert('Paiement reçu !', `Le vendeur vous a versé ${parsedAmount} €`);{/*a remplacé par acheteur*/}
 
     } else if (message === 'REFUSED') {
       setAmount('');
       amountRef.current = 0;
       setTxStatus('connected');
       setStatus(`Transaction refusée par ${connectedDevice?.name}`);
-      Alert.alert('Annulé', "L'acheteur a refusé la transaction.");
+      Alert.alert('Annulé', "Le vendeur a refusé la transaction.");{/*a remplacé par acheteur*/}
 
     } else if (message === 'INSUFFICIENT') {
       setAmount('');
       amountRef.current = 0;
       setTxStatus('connected');
-      setStatus("Solde de l'acheteur insuffisant");
-      Alert.alert('Échec', "L'acheteur n'a pas les fonds nécessaires.");
+      setStatus("Solde du vendeur insuffisant");{/*a remplacé par acheteur*/}
+      Alert.alert('Échec', "Le vendeur n'a pas les fonds nécessaires.");{/*a remplacé par acheteur*/}
     }
   };
 
@@ -200,7 +200,7 @@ export default function VendorScreen() {
       </TouchableOpacity>
 
       <View style={styles.titleSection}>
-        <Text style={styles.title}>Mode Vendeur ↗</Text>
+        <Text style={styles.title}>Mode Acheteur ↗</Text>{/*a remplacé par vendeur*/}
         <Text style={styles.statusText}>{status}</Text>
       </View>
 
@@ -220,7 +220,7 @@ export default function VendorScreen() {
       {txStatus === 'idle' && (
         <>
           <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={startScan}>
-            <Text style={styles.buttonText}>Scanner les acheteurs</Text>
+            <Text style={styles.buttonText}>Scanner les vendeurs</Text>{/*a remplacé par acheteur*/}
           </TouchableOpacity>
 
           <FlatList
@@ -255,7 +255,7 @@ export default function VendorScreen() {
       {txStatus === 'waiting' && (
         <View style={styles.waitingCard}>
           <Text style={styles.waitingIcon}>⏳</Text>
-          <Text style={styles.waitingText}>En attente de validation par l'acheteur...</Text>
+          <Text style={styles.waitingText}>En attente de validation par le vendeur...</Text>{/*a remplacé par acheteur*/}
         </View>
       )}
 

@@ -56,7 +56,7 @@ export default function UserCard({ compact = false }: UserCardProps) {
   if (compact) {
     return (
       <View style={styles.compactCard}>
-        <Text style={styles.compactLabel}>💰 Solde</Text>
+        <Text style={styles.compactLabel}>Solde</Text>
         <Text style={styles.compactAmount}>{user.account_money} €</Text>
       </View>
     );
@@ -66,23 +66,23 @@ export default function UserCard({ compact = false }: UserCardProps) {
   return (
     <View style={styles.card}>
       {/* Balance */}
-      <Text style={styles.balanceLabel}>Solde disponible</Text>
+      <Text style={styles.balanceLabel}>Disponible</Text>
       <Text style={styles.balanceAmount}>{user.account_money} €</Text>
 
       {/* Buttons */}
       <View style={styles.buttonRow}>
         <TouchableOpacity
-          style={[styles.actionButton, styles.addButton]}
-          onPress={() => openModal('add')}
-        >
-          <Text style={styles.actionButtonText}>+ Ajouter</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
           style={[styles.actionButton, styles.withdrawButton]}
           onPress={() => openModal('withdraw')}
         >
-          <Text style={styles.actionButtonText}>- Retirer</Text>
+          <Text style={styles.withdrawButtonText}>- Retirer</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.actionButton, styles.addButton]}
+          onPress={() => openModal('add')}
+        >
+          <Text style={styles.addButtonText}>+ Ajouter</Text>
         </TouchableOpacity>
       </View>
 
@@ -95,28 +95,30 @@ export default function UserCard({ compact = false }: UserCardProps) {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
+            <View style={styles.modalIndicator} />
             <Text style={styles.modalTitle}>
-              {modalType === 'add' ? '➕ Ajouter des fonds' : '➖ Retirer des fonds'}
+              {modalType === 'add' ? 'Ajouter des fonds' : 'Retirer des fonds'}
             </Text>
 
-            <TextInput
-              style={styles.modalInput}
-              placeholder="0.00"
-              placeholderTextColor="#475569"
-              keyboardType="decimal-pad"
-              value={amount}
-              onChangeText={setAmount}
-              autoFocus
-            />
-
-            <Text style={styles.modalCurrency}>€</Text>
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="0"
+                placeholderTextColor="#94A3B8"
+                keyboardType="decimal-pad"
+                value={amount}
+                onChangeText={setAmount}
+                autoFocus
+              />
+              <Text style={styles.modalCurrency}>€</Text>
+            </View>
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
                 onPress={() => setModalVisible(false)}
               >
-                <Text style={styles.modalButtonText}>Annuler</Text>
+                <Text style={styles.cancelButtonText}>Annuler</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -143,91 +145,120 @@ export default function UserCard({ compact = false }: UserCardProps) {
 const styles = StyleSheet.create({
   // Full card styles
   card: {
-    backgroundColor: '#1e293b',
-    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 28,
     padding: 32,
     alignItems: 'center',
     marginBottom: 32,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.05,
+    shadowRadius: 20,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
   },
   balanceLabel: {
-    color: '#94a3b8',
-    fontSize: 14,
+    color: '#64748B',
+    fontSize: 13,
+    fontWeight: '600',
     marginBottom: 8,
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 1.2,
   },
   balanceAmount: {
-    color: '#10b981',
-    fontSize: 56,
-    fontWeight: 'bold',
+    color: '#242424',
+    fontSize: 48,
+    fontWeight: '800',
     marginBottom: 32,
+    letterSpacing: -1,
   },
   buttonRow: {
     flexDirection: 'row',
-    gap: 16,
+    gap: 12,
   },
   actionButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 28,
-    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 16,
     alignItems: 'center',
+    flex: 1,
+    minWidth: 120,
   },
-  addButton: { backgroundColor: '#10b981' },
-  withdrawButton: { backgroundColor: '#ef4444' },
-  actionButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  addButton: {
+    backgroundColor: '#429E9D',
+  },
+  withdrawButton: {
+    backgroundColor: '#4A7572',
+  },
+  addButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  withdrawButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 
   // Compact card styles
   compactCard: {
-    backgroundColor: '#1e293b',
-    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
     padding: 16,
     alignItems: 'center',
     marginBottom: 16,
     flexDirection: 'row',
     justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
   },
-  compactLabel: { color: '#94a3b8', fontSize: 14 },
-  compactAmount: { color: '#10b981', fontSize: 22, fontWeight: 'bold' },
+  compactLabel: { color: '#64748B', fontSize: 14, fontWeight: '500' },
+  compactAmount: { color: '#1E293B', fontSize: 20, fontWeight: 'bold' },
 
   // Modal styles
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: '#fff',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#1e293b',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
     padding: 32,
+    paddingTop: 12,
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
+    elevation: 20,
+  },
+  modalIndicator: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 2,
+    marginBottom: 28,
   },
   modalTitle: {
-    color: '#f8fafc',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 24,
+    color: '#1E293B',
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 32,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 40,
   },
   modalInput: {
-    backgroundColor: '#0f172a',
-    color: '#f8fafc',
-    fontSize: 48,
-    fontWeight: 'bold',
+    color: '#1E293B',
+    fontSize: 56,
+    fontWeight: '800',
     textAlign: 'center',
-    borderRadius: 12,
-    padding: 16,
-    width: '100%',
-    marginBottom: 8,
+    padding: 0,
   },
   modalCurrency: {
-    color: '#94a3b8',
-    fontSize: 16,
-    marginBottom: 32,
+    color: '#94A3B8',
+    fontSize: 32,
+    fontWeight: '600',
+    marginLeft: 8,
   },
   modalButtons: {
     flexDirection: 'row',
@@ -236,12 +267,19 @@ const styles = StyleSheet.create({
   },
   modalButton: {
     flex: 1,
-    padding: 16,
-    borderRadius: 12,
+    padding: 18,
+    borderRadius: 20,
     alignItems: 'center',
   },
-  cancelButton: { backgroundColor: '#334155' },
-  confirmAddButton: { backgroundColor: '#10b981' },
-  confirmWithdrawButton: { backgroundColor: '#ef4444' },
-  modalButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  cancelButton: {
+    backgroundColor: '#F1F5F9',
+  },
+  cancelButtonText: {
+    color: '#64748B',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  confirmAddButton: { backgroundColor: '#0082FC' },
+  confirmWithdrawButton: { backgroundColor: '#EF4444' },
+  modalButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });
