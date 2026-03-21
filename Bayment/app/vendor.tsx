@@ -8,6 +8,7 @@ import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-clas
 import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
 import UserCard from '../components/UserCard';
+import UserCard from '../components/UserCard';
 import {
   getOrCreateIdentity,
   getBalance,
@@ -163,6 +164,9 @@ export default function VendorScreen() {
 
       <Text style={styles.title}>🏪 Vendor Mode</Text>
       <Text style={styles.status}>Status: {status}</Text>
+
+      {/* Compte en ligne — recharge */}
+      <UserCard compact={true} />
 
       {/* UTXO Balance */}
       <View style={styles.utxoCard}>
