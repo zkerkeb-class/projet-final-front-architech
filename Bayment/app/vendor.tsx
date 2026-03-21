@@ -9,7 +9,6 @@ import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
 import UserCard from '../components/UserCard';
 import { updateAccountMoney } from '../services/api';
-// UTXO layer
 import { getOrCreateIdentity, getBalance, createGenesis, preparePayment } from '../services/utxo';
 
 type TransactionStatus = 'idle' | 'connected' | 'entering_amount' | 'waiting' | 'done';
@@ -26,7 +25,6 @@ export default function VendorScreen() {
   const [amount, setAmount] = useState('');
   const subscriptionRef = useRef<any>(null);
   const amountRef = useRef<number>(0);
-  // UTXO state
   const [utxoBalance, setUtxoBalance] = useState(0);
   const [myPub, setMyPub] = useState('');
 
@@ -36,7 +34,6 @@ export default function VendorScreen() {
       setMyPub(pub);
       const bal = await getBalance(pub);
       setUtxoBalance(bal);
-      // Si pas de fragments, convertir account_money en genesis
       if (bal === 0 && user?.account_money && user.account_money > 0) {
         await createGenesis(user.account_money, pub);
         setUtxoBalance(user.account_money);
@@ -102,19 +99,23 @@ export default function VendorScreen() {
 
     if (message === 'ACCEPTED') {
       const parsedAmount = amountRef.current;
-      updateAccountMoney(user!.id, parsedAmount)
-        .then(async () => {
-          const { getUserById } = await import('../services/api');
-          const updatedUser = await getUserById(user!.id);
-          setUser(updatedUser);
-          amountRef.current = 0;
-        })
-        .catch(err => console.error('Update error:', err));
+
+      // Online sync — silencieux si pas de réseau
+      try {
+        updateAccountMoney(user!.id, parsedAmount)
+          .then(async () => {
+            const { getUserById } = await import('../services/api');
+            const updatedUser = await getUserById(user!.id);
+            setUser(updatedUser);
+          })
+          .catch(() => {});
+      } catch {}
 
       // Refresh UTXO balance
       getBalance(myPub).then(setUtxoBalance);
 
       setAmount('');
+      amountRef.current = 0;
       setTxStatus('connected');
       Alert.alert('✅ Transaction accepted!', `Your client paid you ${parsedAmount} €`);
 
@@ -140,20 +141,17 @@ export default function VendorScreen() {
     }
     if (!connectedDeviceRef.current) return;
 
-    // Préparer le fragment UTXO
     const buyerPub = `buyer_${connectedDeviceRef.current.address}`;
     const result = await preparePayment(myPub, buyerPub, parsedAmount);
 
     if (!result) {
-      // Pas assez de fragments — fallback sur AMOUNT: classique
+      // Pas assez de fragments — fallback AMOUNT: classique
       amountRef.current = parsedAmount;
       await connectedDeviceRef.current.write(`AMOUNT:${parsedAmount}\n`);
     } else {
-      // Envoyer le fragment via BLE
       amountRef.current = parsedAmount;
       const payload = `FRAGMENT:${JSON.stringify(result.fragmentToSend)}\n`;
       await connectedDeviceRef.current.write(payload);
-      // Mettre à jour le solde UTXO local
       const newBal = await getBalance(myPub);
       setUtxoBalance(newBal);
     }
@@ -179,7 +177,6 @@ export default function VendorScreen() {
 
       <UserCard compact={true} />
 
-      {/* UTXO offline balance */}
       <View style={styles.utxoCard}>
         <Text style={styles.utxoLabel}>💎 Solde UTXO (offline)</Text>
         <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
@@ -197,10 +194,7 @@ export default function VendorScreen() {
           keyExtractor={(item) => item.address}
           renderItem={({ item }) => (
             <TouchableOpacity
-              style={[
-                styles.deviceItem,
-                connectedDevice?.address === item.address && styles.connectedDevice
-              ]}
+              style={[styles.deviceItem, connectedDevice?.address === item.address && styles.connectedDevice]}
               onPress={() => connectToDevice(item)}
             >
               <Text style={styles.deviceName}>{item.name || 'Unknown'}</Text>
@@ -212,10 +206,7 @@ export default function VendorScreen() {
       )}
 
       {txStatus === 'connected' && (
-        <TouchableOpacity
-          style={[styles.button, styles.chargeButton]}
-          onPress={() => setAmountModalVisible(true)}
-        >
+        <TouchableOpacity style={[styles.button, styles.chargeButton]} onPress={() => setAmountModalVisible(true)}>
           <Text style={styles.buttonText}>💶 Enter the amount</Text>
         </TouchableOpacity>
       )}
@@ -226,12 +217,7 @@ export default function VendorScreen() {
         </View>
       )}
 
-      <Modal
-        visible={amountModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setAmountModalVisible(false)}
-      >
+      <Modal visible={amountModalVisible} transparent animationType="slide" onRequestClose={() => setAmountModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>💶 Billing amount</Text>
@@ -246,16 +232,10 @@ export default function VendorScreen() {
             />
             <Text style={styles.modalCurrency}>€</Text>
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setAmountModalVisible(false)}
-              >
+              <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setAmountModalVisible(false)}>
                 <Text style={styles.modalButtonText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={sendAmount}
-              >
+              <TouchableOpacity style={[styles.modalButton, styles.confirmButton]} onPress={sendAmount}>
                 <Text style={styles.modalButtonText}>Send</Text>
               </TouchableOpacity>
             </View>

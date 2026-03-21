@@ -8,7 +8,6 @@ import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
 import UserCard from '../components/UserCard';
 import { updateAccountMoney, getUserById } from '../services/api';
-// UTXO layer
 import { getOrCreateIdentity, getBalance, receiveFragment, Fragment } from '../services/utxo';
 
 export default function BuyerScreen() {
@@ -21,7 +20,6 @@ export default function BuyerScreen() {
   const [pendingAmount, setPendingAmount] = useState<number>(0);
   const [pendingFragment, setPendingFragment] = useState<Fragment | null>(null);
   const subscriptionRef = useRef<any>(null);
-  // UTXO state
   const [utxoBalance, setUtxoBalance] = useState(0);
   const [myPub, setMyPub] = useState('');
 
@@ -61,7 +59,6 @@ export default function BuyerScreen() {
   };
 
   const handleVendorMessage = (message: string, device: BluetoothDevice) => {
-    // UTXO mode — fragment JSON
     if (message.startsWith('FRAGMENT:')) {
       try {
         const fragment: Fragment = JSON.parse(message.replace('FRAGMENT:', ''));
@@ -76,7 +73,6 @@ export default function BuyerScreen() {
       return;
     }
 
-    // Legacy mode — plain AMOUNT:
     if (message.startsWith('AMOUNT:')) {
       const amount = parseFloat(message.replace('AMOUNT:', ''));
       setPendingAmount(amount);
@@ -105,7 +101,7 @@ export default function BuyerScreen() {
     try {
       await connectedDevice?.write('ACCEPTED\n');
 
-      // UTXO — store fragment + update offline balance
+      // UTXO — store fragment offline
       if (pendingFragment) {
         const accepted = await receiveFragment(pendingFragment);
         if (!accepted) {
@@ -116,10 +112,12 @@ export default function BuyerScreen() {
         }
       }
 
-      // Online balance update (inchangé)
-      await updateAccountMoney(user!.id, -pendingAmount);
-      const updatedUser = await getUserById(user!.id);
-      setUser(updatedUser);
+      // Online sync — silencieux si pas de réseau
+      try {
+        await updateAccountMoney(user!.id, -pendingAmount);
+        const updatedUser = await getUserById(user!.id);
+        setUser(updatedUser);
+      } catch {}
 
       setStatus('📡 Waiting for vendor connection...');
       Alert.alert('✅ Transaction accepted!', `${pendingAmount} € were debited from your account.`);
@@ -163,34 +161,22 @@ export default function BuyerScreen() {
 
       <UserCard compact={true} />
 
-      {/* UTXO offline balance */}
       <View style={styles.utxoCard}>
         <Text style={styles.utxoLabel}>💎 Solde UTXO (offline)</Text>
         <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
       </View>
 
       {!isListening ? (
-        <TouchableOpacity
-          style={[styles.button, styles.peripheralButton]}
-          onPress={startListening}
-        >
+        <TouchableOpacity style={[styles.button, styles.peripheralButton]} onPress={startListening}>
           <Text style={styles.buttonText}>📡 Wait for Vendor</Text>
         </TouchableOpacity>
       ) : (
-        <TouchableOpacity
-          style={[styles.button, styles.stopButton]}
-          onPress={stopListening}
-        >
+        <TouchableOpacity style={[styles.button, styles.stopButton]} onPress={stopListening}>
           <Text style={styles.buttonText}>Stop Listening</Text>
         </TouchableOpacity>
       )}
 
-      <Modal
-        visible={confirmModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => handleRefuse()}
-      >
+      <Modal visible={confirmModalVisible} transparent animationType="slide" onRequestClose={() => handleRefuse()}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>💶 Validate transaction</Text>
@@ -222,16 +208,10 @@ export default function BuyerScreen() {
             </View>
 
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.refuseButton]}
-                onPress={handleRefuse}
-              >
+              <TouchableOpacity style={[styles.modalButton, styles.refuseButton]} onPress={handleRefuse}>
                 <Text style={styles.modalButtonText}>❌ Decline</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.acceptButton]}
-                onPress={handleAccept}
-              >
+              <TouchableOpacity style={[styles.modalButton, styles.acceptButton]} onPress={handleAccept}>
                 <Text style={styles.modalButtonText}>✅ Accept</Text>
               </TouchableOpacity>
             </View>
@@ -249,10 +229,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
   status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
   back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
-  button: {
-    backgroundColor: '#3b82f6', padding: 14,
-    borderRadius: 10, alignItems: 'center', marginBottom: 16
-  },
+  button: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 16 },
   peripheralButton: { backgroundColor: '#8b5cf6' },
   stopButton: { backgroundColor: '#ef4444' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
