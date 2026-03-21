@@ -22,11 +22,13 @@ export default function BuyerScreen() {
   const subscriptionRef = useRef<any>(null);
   const [utxoBalance, setUtxoBalance] = useState(0);
   const [myPub, setMyPub] = useState('');
+  const myPubRef = useRef('');
 
   useEffect(() => {
     const initUTXO = async () => {
       const pub = await getOrCreateIdentity();
       setMyPub(pub);
+      myPubRef.current = pub;
       const bal = await getBalance(pub);
       setUtxoBalance(bal);
     };
@@ -101,13 +103,14 @@ export default function BuyerScreen() {
     try {
       await connectedDevice?.write('ACCEPTED\n');
 
-      // UTXO — store fragment offline
+      // UTXO — remplace ownerPub par myPub pour que getBalance fonctionne
       if (pendingFragment) {
-        const accepted = await receiveFragment(pendingFragment);
+        const fragmentWithMyPub = { ...pendingFragment, ownerPub: myPubRef.current };
+        const accepted = await receiveFragment(fragmentWithMyPub);
         if (!accepted) {
           Alert.alert('⚠️ Double spend', 'Ce fragment a déjà été utilisé.');
         } else {
-          const newBal = await getBalance(myPub);
+          const newBal = await getBalance(myPubRef.current);
           setUtxoBalance(newBal);
         }
       }
@@ -120,7 +123,7 @@ export default function BuyerScreen() {
       } catch {}
 
       setStatus('📡 Waiting for vendor connection...');
-      Alert.alert('✅ Transaction accepted!', `${pendingAmount} € were debited from your account.`);
+      Alert.alert('✅ Transaction accepted!', `${pendingAmount} € debited. UTXO balance updated.`);
       setPendingFragment(null);
     } catch (err: any) {
       Alert.alert('Erreur', err.message);
@@ -197,6 +200,12 @@ export default function BuyerScreen() {
                   {(user?.account_money ?? 0) - pendingAmount} €
                 </Text>
               </View>
+              <View style={styles.balanceRow}>
+                <Text style={styles.balanceLabel}>UTXO after</Text>
+                <Text style={[styles.balanceValue, { color: '#8b5cf6' }]}>
+                  {(utxoBalance + pendingAmount).toFixed(2)} €
+                </Text>
+              </View>
               {pendingFragment && (
                 <View style={styles.balanceRow}>
                   <Text style={styles.balanceLabel}>Fragment ID</Text>
@@ -229,14 +238,14 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
   status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
   back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
-  button: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 16 },
+  button: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 12 },
   peripheralButton: { backgroundColor: '#8b5cf6' },
   stopButton: { backgroundColor: '#ef4444' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   utxoCard: {
     backgroundColor: '#1e293b', borderRadius: 12, padding: 14,
     flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 16,
+    alignItems: 'center', marginBottom: 12,
     borderWidth: 1, borderColor: '#8b5cf6',
   },
   utxoLabel: { color: '#94a3b8', fontSize: 13 },

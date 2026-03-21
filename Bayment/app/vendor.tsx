@@ -27,23 +27,33 @@ export default function VendorScreen() {
   const amountRef = useRef<number>(0);
   const [utxoBalance, setUtxoBalance] = useState(0);
   const [myPub, setMyPub] = useState('');
+  const myPubRef = useRef('');
 
   useEffect(() => {
     const initUTXO = async () => {
       const pub = await getOrCreateIdentity();
       setMyPub(pub);
+      myPubRef.current = pub;
       const bal = await getBalance(pub);
       setUtxoBalance(bal);
-      if (bal === 0 && user?.account_money && user.account_money > 0) {
-        await createGenesis(user.account_money, pub);
-        setUtxoBalance(user.account_money);
-      }
     };
     initUTXO();
     return () => {
       if (subscriptionRef.current) subscriptionRef.current.remove();
     };
   }, []);
+
+  const handleRecharge = async () => {
+    const amount = user?.account_money ?? 0;
+    if (amount <= 0) {
+      Alert.alert('Solde vide', "Ajoutez d'abord de l'argent en ligne via UserCard.");
+      return;
+    }
+    await createGenesis(amount, myPubRef.current);
+    const newBal = await getBalance(myPubRef.current);
+    setUtxoBalance(newBal);
+    Alert.alert('✅ Rechargé', `${amount} € chargés dans votre wallet offline.`);
+  };
 
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
@@ -111,9 +121,7 @@ export default function VendorScreen() {
           .catch(() => {});
       } catch {}
 
-      // Refresh UTXO balance
-      getBalance(myPub).then(setUtxoBalance);
-
+      getBalance(myPubRef.current).then(setUtxoBalance);
       setAmount('');
       amountRef.current = 0;
       setTxStatus('connected');
@@ -142,17 +150,16 @@ export default function VendorScreen() {
     if (!connectedDeviceRef.current) return;
 
     const buyerPub = `buyer_${connectedDeviceRef.current.address}`;
-    const result = await preparePayment(myPub, buyerPub, parsedAmount);
+    const result = await preparePayment(myPubRef.current, buyerPub, parsedAmount);
 
     if (!result) {
-      // Pas assez de fragments — fallback AMOUNT: classique
       amountRef.current = parsedAmount;
       await connectedDeviceRef.current.write(`AMOUNT:${parsedAmount}\n`);
     } else {
       amountRef.current = parsedAmount;
       const payload = `FRAGMENT:${JSON.stringify(result.fragmentToSend)}\n`;
       await connectedDeviceRef.current.write(payload);
-      const newBal = await getBalance(myPub);
+      const newBal = await getBalance(myPubRef.current);
       setUtxoBalance(newBal);
     }
 
@@ -178,8 +185,13 @@ export default function VendorScreen() {
       <UserCard compact={true} />
 
       <View style={styles.utxoCard}>
-        <Text style={styles.utxoLabel}>💎 Solde UTXO (offline)</Text>
-        <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
+        <View>
+          <Text style={styles.utxoLabel}>💎 Solde UTXO (offline)</Text>
+          <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
+        </View>
+        <TouchableOpacity style={styles.rechargeBtn} onPress={handleRecharge}>
+          <Text style={styles.rechargeBtnText}>⚡ Recharger</Text>
+        </TouchableOpacity>
       </View>
 
       {txStatus === 'idle' && (
@@ -230,7 +242,7 @@ export default function VendorScreen() {
               onChangeText={setAmount}
               autoFocus
             />
-            <Text style={styles.modalCurrency}>€</Text>
+            <Text style={styles.modalCurrency}>€ — UTXO dispo : {utxoBalance.toFixed(2)} €</Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setAmountModalVisible(false)}>
                 <Text style={styles.modalButtonText}>Cancel</Text>
@@ -253,7 +265,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
   status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
   back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
-  button: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 16 },
+  button: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 12 },
   chargeButton: { backgroundColor: '#10b981' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   deviceItem: { backgroundColor: '#1e293b', padding: 14, borderRadius: 8, marginBottom: 8 },
@@ -266,16 +278,21 @@ const styles = StyleSheet.create({
   utxoCard: {
     backgroundColor: '#1e293b', borderRadius: 12, padding: 14,
     flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 16,
+    alignItems: 'center', marginBottom: 12,
     borderWidth: 1, borderColor: '#10b981',
   },
-  utxoLabel: { color: '#94a3b8', fontSize: 13 },
+  utxoLabel: { color: '#94a3b8', fontSize: 13, marginBottom: 4 },
   utxoAmount: { color: '#10b981', fontSize: 20, fontWeight: 'bold' },
+  rechargeBtn: {
+    backgroundColor: '#10b981', paddingVertical: 8,
+    paddingHorizontal: 14, borderRadius: 8,
+  },
+  rechargeBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#1e293b', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 32, alignItems: 'center' },
   modalTitle: { color: '#f8fafc', fontSize: 20, fontWeight: 'bold', marginBottom: 24 },
   modalInput: { backgroundColor: '#0f172a', color: '#f8fafc', fontSize: 48, fontWeight: 'bold', textAlign: 'center', borderRadius: 12, padding: 16, width: '100%', marginBottom: 8 },
-  modalCurrency: { color: '#94a3b8', fontSize: 16, marginBottom: 32 },
+  modalCurrency: { color: '#94a3b8', fontSize: 13, marginBottom: 32 },
   modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
   modalButton: { flex: 1, padding: 16, borderRadius: 12, alignItems: 'center' },
   cancelButton: { backgroundColor: '#334155' },
