@@ -6,7 +6,6 @@ import {
 import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-classic';
 import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
-import UserCard from '../components/UserCard';
 import {
   getOrCreateIdentity,
   getBalance,
@@ -131,9 +130,6 @@ export default function BuyerScreen() {
 
       <Text style={styles.title}>🛍️ Buyer Mode</Text>
       <Text style={styles.status}>Status: {status}</Text>
-
-      {/* Compte en ligne — recharge */}
-      <UserCard compact={true} />
 
       {/* UTXO Balance */}
       <View style={styles.utxoCard}>
