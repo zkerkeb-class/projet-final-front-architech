@@ -132,9 +132,13 @@ export default function AuthScreen() {
             }
           ]}
         >
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Text style={styles.backText}>← Back</Text>
+          <TouchableOpacity 
+            onPress={() => router.canGoBack() ? router.back() : null} 
+            style={styles.backButton}
+          >
+            <Text style={styles.backText}>{router.canGoBack() ? '← Back' : ''}</Text>
           </TouchableOpacity>
+
 
           <Text style={styles.title}>Bayment</Text>
 
