@@ -8,45 +8,42 @@ import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-clas
 import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
 import UserCard from '../components/UserCard';
-import {
-  getOrCreateIdentity,
-  getBalance,
-  createGenesis,
-  preparePayment,
-} from '../services/utxo';
+import { updateAccountMoney } from '../services/api';
+// UTXO layer
+import { getOrCreateIdentity, getBalance, createGenesis, preparePayment } from '../services/utxo';
 
-type TransactionStatus = 'idle' | 'connected' | 'waiting' | 'done';
+type TransactionStatus = 'idle' | 'connected' | 'entering_amount' | 'waiting' | 'done';
 
 export default function VendorScreen() {
   const router = useRouter();
-  const { user } = useUser();
+  const { user, setUser } = useUser();
   const [devices, setDevices] = useState<BluetoothDevice[]>([]);
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
+  const connectedDeviceRef = useRef<BluetoothDevice | null>(null);
   const [status, setStatus] = useState('Ready to scan for buyers');
   const [txStatus, setTxStatus] = useState<TransactionStatus>('idle');
   const [amountModalVisible, setAmountModalVisible] = useState(false);
   const [amount, setAmount] = useState('');
+  const subscriptionRef = useRef<any>(null);
+  const amountRef = useRef<number>(0);
+  // UTXO state
   const [utxoBalance, setUtxoBalance] = useState(0);
   const [myPub, setMyPub] = useState('');
-  const subscriptionRef = useRef<any>(null);
 
   useEffect(() => {
-    const init = async () => {
+    const initUTXO = async () => {
       const pub = await getOrCreateIdentity();
       setMyPub(pub);
       const bal = await getBalance(pub);
       setUtxoBalance(bal);
-
-      // Si pas de fragments, créer un genesis depuis account_money
+      // Si pas de fragments, convertir account_money en genesis
       if (bal === 0 && user?.account_money && user.account_money > 0) {
         await createGenesis(user.account_money, pub);
         setUtxoBalance(user.account_money);
       }
     };
-    init();
-
+    initUTXO();
     return () => {
-      if (connectedDevice) connectedDevice.disconnect();
       if (subscriptionRef.current) subscriptionRef.current.remove();
     };
   }, []);
@@ -86,11 +83,13 @@ export default function VendorScreen() {
       });
       if (connected) {
         setConnectedDevice(device);
+        connectedDeviceRef.current = device;
         setTxStatus('connected');
         setStatus(`Connected to ${device.name}! Enter amount to charge.`);
 
         subscriptionRef.current = device.onDataReceived((data: any) => {
-          handleBuyerResponse(data.data.trim());
+          const message = data.data.trim();
+          handleBuyerResponse(message);
         });
       }
     } catch (err: any) {
@@ -99,54 +98,68 @@ export default function VendorScreen() {
   };
 
   const handleBuyerResponse = (message: string) => {
+    console.log('📨 Message received:', message);
+
     if (message === 'ACCEPTED') {
-      setTxStatus('done');
-      setStatus(`Connected to ${connectedDevice?.name}! Enter amount to charge.`);
+      const parsedAmount = amountRef.current;
+      updateAccountMoney(user!.id, parsedAmount)
+        .then(async () => {
+          const { getUserById } = await import('../services/api');
+          const updatedUser = await getUserById(user!.id);
+          setUser(updatedUser);
+          amountRef.current = 0;
+        })
+        .catch(err => console.error('Update error:', err));
+
       // Refresh UTXO balance
       getBalance(myPub).then(setUtxoBalance);
-      Alert.alert('✅ Transaction accepted!', `${amount} € transférés avec succès.`);
+
+      setAmount('');
       setTxStatus('connected');
+      Alert.alert('✅ Transaction accepted!', `Your client paid you ${parsedAmount} €`);
+
     } else if (message === 'REFUSED') {
+      setAmount('');
+      amountRef.current = 0;
       setTxStatus('connected');
-      Alert.alert('❌ Cancelled', 'Your client refused the transaction.');
+      Alert.alert('❌ Cancelled', 'Your client cancelled the transaction.');
+
     } else if (message === 'INSUFFICIENT') {
+      setAmount('');
+      amountRef.current = 0;
       setTxStatus('connected');
-      Alert.alert('❌ Insufficient', 'Your client cannot cover this amount.');
-    } else if (message === 'DOUBLE_SPEND') {
-      setTxStatus('connected');
-      Alert.alert('⚠️ Double spend', 'Fragment already used — transaction rejected.');
+      Alert.alert('❌ Insufficient', 'Your client cannot do this transaction.');
     }
   };
 
-  const sendPaymentRequest = async () => {
+  const sendAmount = async () => {
     const parsedAmount = parseFloat(amount);
     if (!parsedAmount || parsedAmount <= 0) {
       Alert.alert('Erreur', 'Please enter a valid amount');
       return;
     }
-    if (!connectedDevice) return;
+    if (!connectedDeviceRef.current) return;
 
     // Préparer le fragment UTXO
-    const result = await preparePayment(myPub, `buyer_${connectedDevice.address}`, parsedAmount);
+    const buyerPub = `buyer_${connectedDeviceRef.current.address}`;
+    const result = await preparePayment(myPub, buyerPub, parsedAmount);
+
     if (!result) {
-      Alert.alert('Solde insuffisant', `Vous avez ${utxoBalance} € de fragments disponibles.`);
-      return;
-    }
-
-    try {
-      // Envoyer le fragment JSON via BLE
+      // Pas assez de fragments — fallback sur AMOUNT: classique
+      amountRef.current = parsedAmount;
+      await connectedDeviceRef.current.write(`AMOUNT:${parsedAmount}\n`);
+    } else {
+      // Envoyer le fragment via BLE
+      amountRef.current = parsedAmount;
       const payload = `FRAGMENT:${JSON.stringify(result.fragmentToSend)}\n`;
-      await connectedDevice.write(payload);
-      setAmountModalVisible(false);
-      setTxStatus('waiting');
-      setStatus('Fragment envoyé, en attente de confirmation...');
-
-      // Mettre à jour le solde local immédiatement
+      await connectedDeviceRef.current.write(payload);
+      // Mettre à jour le solde UTXO local
       const newBal = await getBalance(myPub);
       setUtxoBalance(newBal);
-    } catch (err: any) {
-      setStatus(`Sending error: ${err.message}`);
     }
+
+    setAmountModalVisible(false);
+    setTxStatus('waiting');
   };
 
   return (
@@ -164,7 +177,9 @@ export default function VendorScreen() {
       <Text style={styles.title}>🏪 Vendor Mode</Text>
       <Text style={styles.status}>Status: {status}</Text>
 
-      {/* UTXO Balance */}
+      <UserCard compact={true} />
+
+      {/* UTXO offline balance */}
       <View style={styles.utxoCard}>
         <Text style={styles.utxoLabel}>💎 Solde UTXO (offline)</Text>
         <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
@@ -182,7 +197,10 @@ export default function VendorScreen() {
           keyExtractor={(item) => item.address}
           renderItem={({ item }) => (
             <TouchableOpacity
-              style={[styles.deviceItem, connectedDevice?.address === item.address && styles.connectedDevice]}
+              style={[
+                styles.deviceItem,
+                connectedDevice?.address === item.address && styles.connectedDevice
+              ]}
               onPress={() => connectToDevice(item)}
             >
               <Text style={styles.deviceName}>{item.name || 'Unknown'}</Text>
@@ -204,11 +222,16 @@ export default function VendorScreen() {
 
       {txStatus === 'waiting' && (
         <View style={styles.waitingContainer}>
-          <Text style={styles.waitingText}>⏳ Waiting for buyer confirmation...</Text>
+          <Text style={styles.waitingText}>⏳ Waiting for buyer...</Text>
         </View>
       )}
 
-      <Modal visible={amountModalVisible} transparent animationType="slide">
+      <Modal
+        visible={amountModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAmountModalVisible(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>💶 Billing amount</Text>
@@ -221,12 +244,18 @@ export default function VendorScreen() {
               onChangeText={setAmount}
               autoFocus
             />
-            <Text style={styles.modalCurrency}>€ — Solde dispo : {utxoBalance.toFixed(2)} €</Text>
+            <Text style={styles.modalCurrency}>€</Text>
             <View style={styles.modalButtons}>
-              <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setAmountModalVisible(false)}>
-                <Text style={styles.modalButtonText}>Annuler</Text>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setAmountModalVisible(false)}
+              >
+                <Text style={styles.modalButtonText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalButton, styles.confirmButton]} onPress={sendPaymentRequest}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.confirmButton]}
+                onPress={sendAmount}
+              >
                 <Text style={styles.modalButtonText}>Send</Text>
               </TouchableOpacity>
             </View>
@@ -244,14 +273,6 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
   status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
   back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
-  utxoCard: {
-    backgroundColor: '#1e293b', borderRadius: 12, padding: 16,
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 16,
-    borderWidth: 1, borderColor: '#10b981',
-  },
-  utxoLabel: { color: '#94a3b8', fontSize: 13 },
-  utxoAmount: { color: '#10b981', fontSize: 22, fontWeight: 'bold' },
   button: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 16 },
   chargeButton: { backgroundColor: '#10b981' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
@@ -262,11 +283,19 @@ const styles = StyleSheet.create({
   empty: { color: '#475569', textAlign: 'center', marginTop: 20 },
   waitingContainer: { backgroundColor: '#1e293b', padding: 20, borderRadius: 12, alignItems: 'center', marginTop: 16 },
   waitingText: { color: '#94a3b8', fontSize: 16 },
+  utxoCard: {
+    backgroundColor: '#1e293b', borderRadius: 12, padding: 14,
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: 16,
+    borderWidth: 1, borderColor: '#10b981',
+  },
+  utxoLabel: { color: '#94a3b8', fontSize: 13 },
+  utxoAmount: { color: '#10b981', fontSize: 20, fontWeight: 'bold' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#1e293b', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 32, alignItems: 'center' },
   modalTitle: { color: '#f8fafc', fontSize: 20, fontWeight: 'bold', marginBottom: 24 },
   modalInput: { backgroundColor: '#0f172a', color: '#f8fafc', fontSize: 48, fontWeight: 'bold', textAlign: 'center', borderRadius: 12, padding: 16, width: '100%', marginBottom: 8 },
-  modalCurrency: { color: '#94a3b8', fontSize: 13, marginBottom: 32 },
+  modalCurrency: { color: '#94a3b8', fontSize: 16, marginBottom: 32 },
   modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
   modalButton: { flex: 1, padding: 16, borderRadius: 12, alignItems: 'center' },
   cancelButton: { backgroundColor: '#334155' },

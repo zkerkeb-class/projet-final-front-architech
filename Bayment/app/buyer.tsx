@@ -6,33 +6,33 @@ import {
 import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-classic';
 import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
-import {
-  getOrCreateIdentity,
-  getBalance,
-  receiveFragment,
-  Fragment,
-} from '../services/utxo';
+import UserCard from '../components/UserCard';
+import { updateAccountMoney, getUserById } from '../services/api';
+// UTXO layer
+import { getOrCreateIdentity, getBalance, receiveFragment, Fragment } from '../services/utxo';
 
 export default function BuyerScreen() {
   const router = useRouter();
-  const { user } = useUser();
+  const { user, setUser } = useUser();
   const [isListening, setIsListening] = useState(false);
-  const [status, setStatus] = useState('Ready to receive a payment');
+  const [status, setStatus] = useState('Ready to wait for a vendor');
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [pendingAmount, setPendingAmount] = useState<number>(0);
   const [pendingFragment, setPendingFragment] = useState<Fragment | null>(null);
+  const subscriptionRef = useRef<any>(null);
+  // UTXO state
   const [utxoBalance, setUtxoBalance] = useState(0);
   const [myPub, setMyPub] = useState('');
-  const subscriptionRef = useRef<any>(null);
 
   useEffect(() => {
-    const init = async () => {
+    const initUTXO = async () => {
       const pub = await getOrCreateIdentity();
       setMyPub(pub);
       const bal = await getBalance(pub);
       setUtxoBalance(bal);
     };
-    init();
+    initUTXO();
     return () => stopListening();
   }, []);
 
@@ -47,10 +47,11 @@ export default function BuyerScreen() {
       const device = await RNBluetoothClassic.accept({ delimiter: '\n' });
       if (device) {
         setConnectedDevice(device);
-        setStatus(`Connected to ${device.name}! Waiting for payment...`);
+        setStatus(`Connected to ${device.name}! Waiting for payment request...`);
 
         subscriptionRef.current = device.onDataReceived((data: any) => {
-          handleVendorMessage(data.data.trim(), device);
+          const message = data.data.trim();
+          handleVendorMessage(message, device);
         });
       }
     } catch (err: any) {
@@ -60,43 +61,72 @@ export default function BuyerScreen() {
   };
 
   const handleVendorMessage = (message: string, device: BluetoothDevice) => {
+    // UTXO mode — fragment JSON
     if (message.startsWith('FRAGMENT:')) {
       try {
-        const raw = message.replace('FRAGMENT:', '');
-        const fragment: Fragment = JSON.parse(raw);
+        const fragment: Fragment = JSON.parse(message.replace('FRAGMENT:', ''));
         setPendingFragment(fragment);
-        setStatus(`💶 Incoming payment: ${fragment.value} €`);
-        setConfirmModalVisible(true);
+        setPendingAmount(fragment.value);
+        setStatus(`💶 Incoming transaction: ${fragment.value} €`);
+        setTimeout(() => checkAndProcessPayment(fragment.value, device), 2000);
       } catch {
         setStatus('⚠️ Received malformed fragment');
         device.write('REFUSED\n');
       }
+      return;
+    }
+
+    // Legacy mode — plain AMOUNT:
+    if (message.startsWith('AMOUNT:')) {
+      const amount = parseFloat(message.replace('AMOUNT:', ''));
+      setPendingAmount(amount);
+      setPendingFragment(null);
+      setStatus(`💶 Incoming transaction: ${amount} €`);
+      setTimeout(() => checkAndProcessPayment(amount, device), 2000);
+    }
+  };
+
+  const checkAndProcessPayment = (amount: number, device: BluetoothDevice) => {
+    const currentBalance = user!.account_money;
+    if (currentBalance < amount) {
+      device.write('INSUFFICIENT\n');
+      Alert.alert(
+        '❌ Insufficient Balance',
+        `You currently have ${currentBalance} € but the transaction's amount is ${amount} €`
+      );
+      setStatus('📡 Waiting for vendor connection...');
+    } else {
+      setConfirmModalVisible(true);
     }
   };
 
   const handleAccept = async () => {
-    if (!pendingFragment || !connectedDevice) return;
     setConfirmModalVisible(false);
+    try {
+      await connectedDevice?.write('ACCEPTED\n');
 
-    // Double-spend check + store fragment
-    const accepted = await receiveFragment(pendingFragment);
+      // UTXO — store fragment + update offline balance
+      if (pendingFragment) {
+        const accepted = await receiveFragment(pendingFragment);
+        if (!accepted) {
+          Alert.alert('⚠️ Double spend', 'Ce fragment a déjà été utilisé.');
+        } else {
+          const newBal = await getBalance(myPub);
+          setUtxoBalance(newBal);
+        }
+      }
 
-    if (!accepted) {
-      await connectedDevice.write('DOUBLE_SPEND\n');
-      Alert.alert('⚠️ Double spend', 'Ce fragment a déjà été utilisé.');
+      // Online balance update (inchangé)
+      await updateAccountMoney(user!.id, -pendingAmount);
+      const updatedUser = await getUserById(user!.id);
+      setUser(updatedUser);
+
       setStatus('📡 Waiting for vendor connection...');
-      return;
+      Alert.alert('✅ Transaction accepted!', `${pendingAmount} € were debited from your account.`);
+      setPendingFragment(null);
+    } catch (err: any) {
+      Alert.alert('Erreur', err.message);
     }
-
-    await connectedDevice.write('ACCEPTED\n');
-
-    // Refresh UTXO balance
-    const newBal = await getBalance(myPub);
-    setUtxoBalance(newBal);
-
-    setStatus('📡 Waiting for vendor connection...');
-    Alert.alert('✅ Payment received!', `+${pendingFragment.value} € ajoutés à votre wallet offline.`);
-    setPendingFragment(null);
   };
 
   const handleRefuse = async () => {
@@ -104,7 +134,7 @@ export default function BuyerScreen() {
     await connectedDevice?.write('REFUSED\n');
     setPendingFragment(null);
     setStatus('📡 Waiting for vendor connection...');
-    Alert.alert('❌ Refused', 'You declined the transaction.');
+    Alert.alert('❌ Cancelled Transaction', 'You refused the transaction.');
   };
 
   const stopListening = () => {
@@ -131,62 +161,77 @@ export default function BuyerScreen() {
       <Text style={styles.title}>🛍️ Buyer Mode</Text>
       <Text style={styles.status}>Status: {status}</Text>
 
-      {/* UTXO Balance */}
+      <UserCard compact={true} />
+
+      {/* UTXO offline balance */}
       <View style={styles.utxoCard}>
         <Text style={styles.utxoLabel}>💎 Solde UTXO (offline)</Text>
         <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
       </View>
 
       {!isListening ? (
-        <TouchableOpacity style={[styles.button, styles.peripheralButton]} onPress={startListening}>
+        <TouchableOpacity
+          style={[styles.button, styles.peripheralButton]}
+          onPress={startListening}
+        >
           <Text style={styles.buttonText}>📡 Wait for Vendor</Text>
         </TouchableOpacity>
       ) : (
-        <TouchableOpacity style={[styles.button, styles.stopButton]} onPress={stopListening}>
+        <TouchableOpacity
+          style={[styles.button, styles.stopButton]}
+          onPress={stopListening}
+        >
           <Text style={styles.buttonText}>Stop Listening</Text>
         </TouchableOpacity>
       )}
 
-      {/* Payment confirmation modal */}
       <Modal
         visible={confirmModalVisible}
         transparent
         animationType="slide"
-        onRequestClose={handleRefuse}
+        onRequestClose={() => handleRefuse()}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>💶 Validate transaction</Text>
 
             <View style={styles.amountContainer}>
-              <Text style={styles.amountLabel}>Amount received</Text>
-              <Text style={styles.amountValue}>{pendingFragment?.value ?? 0} €</Text>
+              <Text style={styles.amountLabel}>Amount</Text>
+              <Text style={styles.amountValue}>{pendingAmount} €</Text>
             </View>
 
             <View style={styles.balanceContainer}>
               <View style={styles.balanceRow}>
-                <Text style={styles.balanceLabel}>Current UTXO balance</Text>
-                <Text style={styles.balanceValue}>{utxoBalance.toFixed(2)} €</Text>
+                <Text style={styles.balanceLabel}>Current balance</Text>
+                <Text style={styles.balanceValue}>{user?.account_money} €</Text>
               </View>
               <View style={styles.balanceRow}>
-                <Text style={styles.balanceLabel}>Balance after</Text>
+                <Text style={styles.balanceLabel}>Balance after payment</Text>
                 <Text style={[styles.balanceValue, styles.balanceAfter]}>
-                  {(utxoBalance + (pendingFragment?.value ?? 0)).toFixed(2)} €
+                  {(user?.account_money ?? 0) - pendingAmount} €
                 </Text>
               </View>
-              <View style={styles.balanceRow}>
-                <Text style={styles.balanceLabel}>Fragment ID</Text>
-                <Text style={[styles.balanceValue, { fontSize: 10, color: '#475569' }]}>
-                  {pendingFragment?.id.slice(0, 16)}...
-                </Text>
-              </View>
+              {pendingFragment && (
+                <View style={styles.balanceRow}>
+                  <Text style={styles.balanceLabel}>Fragment ID</Text>
+                  <Text style={[styles.balanceValue, { fontSize: 10, color: '#475569' }]}>
+                    {pendingFragment.id.slice(0, 16)}...
+                  </Text>
+                </View>
+              )}
             </View>
 
             <View style={styles.modalButtons}>
-              <TouchableOpacity style={[styles.modalButton, styles.refuseButton]} onPress={handleRefuse}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.refuseButton]}
+                onPress={handleRefuse}
+              >
                 <Text style={styles.modalButtonText}>❌ Decline</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.modalButton, styles.acceptButton]} onPress={handleAccept}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.acceptButton]}
+                onPress={handleAccept}
+              >
                 <Text style={styles.modalButtonText}>✅ Accept</Text>
               </TouchableOpacity>
             </View>
@@ -204,18 +249,21 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
   status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
   back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
+  button: {
+    backgroundColor: '#3b82f6', padding: 14,
+    borderRadius: 10, alignItems: 'center', marginBottom: 16
+  },
+  peripheralButton: { backgroundColor: '#8b5cf6' },
+  stopButton: { backgroundColor: '#ef4444' },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   utxoCard: {
-    backgroundColor: '#1e293b', borderRadius: 12, padding: 16,
+    backgroundColor: '#1e293b', borderRadius: 12, padding: 14,
     flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', marginBottom: 16,
     borderWidth: 1, borderColor: '#8b5cf6',
   },
   utxoLabel: { color: '#94a3b8', fontSize: 13 },
-  utxoAmount: { color: '#8b5cf6', fontSize: 22, fontWeight: 'bold' },
-  button: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 16 },
-  peripheralButton: { backgroundColor: '#8b5cf6' },
-  stopButton: { backgroundColor: '#ef4444' },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  utxoAmount: { color: '#8b5cf6', fontSize: 20, fontWeight: 'bold' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#1e293b', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 32 },
   modalTitle: { color: '#f8fafc', fontSize: 20, fontWeight: 'bold', marginBottom: 24, textAlign: 'center' },
@@ -226,7 +274,7 @@ const styles = StyleSheet.create({
   balanceRow: { flexDirection: 'row', justifyContent: 'space-between' },
   balanceLabel: { color: '#94a3b8', fontSize: 14 },
   balanceValue: { color: '#f8fafc', fontSize: 14, fontWeight: '600' },
-  balanceAfter: { color: '#10b981' },
+  balanceAfter: { color: '#ef4444' },
   modalButtons: { flexDirection: 'row', gap: 12 },
   modalButton: { flex: 1, padding: 16, borderRadius: 12, alignItems: 'center' },
   refuseButton: { backgroundColor: '#ef4444' },
