@@ -54,7 +54,8 @@
         }
       ],
       "react-native-ble-plx",
-      "react-native-ble-manager"
+      "react-native-ble-manager",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,
