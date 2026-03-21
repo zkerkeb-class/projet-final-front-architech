@@ -8,8 +8,6 @@ import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
 import UserCard from '../components/UserCard';
 import { updateAccountMoney, getUserById } from '../services/api';
-// UTXO layer
-import { getOrCreateIdentity, getBalance, receiveFragment, Fragment } from '../services/utxo';
 
 export default function BuyerScreen() {
   const router = useRouter();
@@ -19,20 +17,9 @@ export default function BuyerScreen() {
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [pendingAmount, setPendingAmount] = useState<number>(0);
-  const [pendingFragment, setPendingFragment] = useState<Fragment | null>(null);
   const subscriptionRef = useRef<any>(null);
-  // UTXO state
-  const [utxoBalance, setUtxoBalance] = useState(0);
-  const [myPub, setMyPub] = useState('');
 
   useEffect(() => {
-    const initUTXO = async () => {
-      const pub = await getOrCreateIdentity();
-      setMyPub(pub);
-      const bal = await getBalance(pub);
-      setUtxoBalance(bal);
-    };
-    initUTXO();
     return () => stopListening();
   }, []);
 
@@ -61,34 +48,24 @@ export default function BuyerScreen() {
   };
 
   const handleVendorMessage = (message: string, device: BluetoothDevice) => {
-    // UTXO mode — fragment JSON
-    if (message.startsWith('FRAGMENT:')) {
-      try {
-        const fragment: Fragment = JSON.parse(message.replace('FRAGMENT:', ''));
-        setPendingFragment(fragment);
-        setPendingAmount(fragment.value);
-        setStatus(`💶 Incoming transaction: ${fragment.value} €`);
-        setTimeout(() => checkAndProcessPayment(fragment.value, device), 2000);
-      } catch {
-        setStatus('⚠️ Received malformed fragment');
-        device.write('REFUSED\n');
-      }
-      return;
-    }
-
-    // Legacy mode — plain AMOUNT:
     if (message.startsWith('AMOUNT:')) {
       const amount = parseFloat(message.replace('AMOUNT:', ''));
       setPendingAmount(amount);
-      setPendingFragment(null);
       setStatus(`💶 Incoming transaction: ${amount} €`);
-      setTimeout(() => checkAndProcessPayment(amount, device), 2000);
+
+      // Wait 2 seconds then check balance
+      setTimeout(() => {
+        checkAndProcessPayment(amount, device);
+      }, 2000);
     }
   };
 
   const checkAndProcessPayment = (amount: number, device: BluetoothDevice) => {
+    // Use local balance — no API call
     const currentBalance = user!.account_money;
+
     if (currentBalance < amount) {
+      // Not enough funds
       device.write('INSUFFICIENT\n');
       Alert.alert(
         '❌ Insufficient Balance',
@@ -96,6 +73,7 @@ export default function BuyerScreen() {
       );
       setStatus('📡 Waiting for vendor connection...');
     } else {
+      // Enough funds — show confirmation modal
       setConfirmModalVisible(true);
     }
   };
@@ -103,27 +81,17 @@ export default function BuyerScreen() {
   const handleAccept = async () => {
     setConfirmModalVisible(false);
     try {
+      // Send to vendor FIRST
       await connectedDevice?.write('ACCEPTED\n');
+      console.log('📤 ACCEPTED sent to vendor');
 
-      // UTXO — store fragment + update offline balance
-      if (pendingFragment) {
-        const accepted = await receiveFragment(pendingFragment);
-        if (!accepted) {
-          Alert.alert('⚠️ Double spend', 'Ce fragment a déjà été utilisé.');
-        } else {
-          const newBal = await getBalance(myPub);
-          setUtxoBalance(newBal);
-        }
-      }
-
-      // Online balance update (inchangé)
+      // Then update database
       await updateAccountMoney(user!.id, -pendingAmount);
       const updatedUser = await getUserById(user!.id);
       setUser(updatedUser);
 
       setStatus('📡 Waiting for vendor connection...');
       Alert.alert('✅ Transaction accepted!', `${pendingAmount} € were debited from your account.`);
-      setPendingFragment(null);
     } catch (err: any) {
       Alert.alert('Erreur', err.message);
     }
@@ -132,7 +100,6 @@ export default function BuyerScreen() {
   const handleRefuse = async () => {
     setConfirmModalVisible(false);
     await connectedDevice?.write('REFUSED\n');
-    setPendingFragment(null);
     setStatus('📡 Waiting for vendor connection...');
     Alert.alert('❌ Cancelled Transaction', 'You refused the transaction.');
   };
@@ -148,6 +115,7 @@ export default function BuyerScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Username top right */}
       {user && (
         <View style={styles.header}>
           <Text style={styles.username}>👤 {user.username}</Text>
@@ -162,12 +130,6 @@ export default function BuyerScreen() {
       <Text style={styles.status}>Status: {status}</Text>
 
       <UserCard compact={true} />
-
-      {/* UTXO offline balance */}
-      <View style={styles.utxoCard}>
-        <Text style={styles.utxoLabel}>💎 Solde UTXO (offline)</Text>
-        <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
-      </View>
 
       {!isListening ? (
         <TouchableOpacity
@@ -185,6 +147,7 @@ export default function BuyerScreen() {
         </TouchableOpacity>
       )}
 
+      {/* Payment confirmation modal */}
       <Modal
         visible={confirmModalVisible}
         transparent
@@ -211,14 +174,6 @@ export default function BuyerScreen() {
                   {(user?.account_money ?? 0) - pendingAmount} €
                 </Text>
               </View>
-              {pendingFragment && (
-                <View style={styles.balanceRow}>
-                  <Text style={styles.balanceLabel}>Fragment ID</Text>
-                  <Text style={[styles.balanceValue, { fontSize: 10, color: '#475569' }]}>
-                    {pendingFragment.id.slice(0, 16)}...
-                  </Text>
-                </View>
-              )}
             </View>
 
             <View style={styles.modalButtons}>
@@ -228,6 +183,7 @@ export default function BuyerScreen() {
               >
                 <Text style={styles.modalButtonText}>❌ Decline</Text>
               </TouchableOpacity>
+
               <TouchableOpacity
                 style={[styles.modalButton, styles.acceptButton]}
                 onPress={handleAccept}
@@ -256,21 +212,27 @@ const styles = StyleSheet.create({
   peripheralButton: { backgroundColor: '#8b5cf6' },
   stopButton: { backgroundColor: '#ef4444' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  utxoCard: {
-    backgroundColor: '#1e293b', borderRadius: 12, padding: 14,
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 16,
-    borderWidth: 1, borderColor: '#8b5cf6',
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end'
   },
-  utxoLabel: { color: '#94a3b8', fontSize: 13 },
-  utxoAmount: { color: '#8b5cf6', fontSize: 20, fontWeight: 'bold' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#1e293b', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 32 },
-  modalTitle: { color: '#f8fafc', fontSize: 20, fontWeight: 'bold', marginBottom: 24, textAlign: 'center' },
-  amountContainer: { backgroundColor: '#0f172a', borderRadius: 12, padding: 20, alignItems: 'center', marginBottom: 16 },
+  modalContent: {
+    backgroundColor: '#1e293b', borderTopLeftRadius: 24,
+    borderTopRightRadius: 24, padding: 32
+  },
+  modalTitle: {
+    color: '#f8fafc', fontSize: 20,
+    fontWeight: 'bold', marginBottom: 24, textAlign: 'center'
+  },
+  amountContainer: {
+    backgroundColor: '#0f172a', borderRadius: 12,
+    padding: 20, alignItems: 'center', marginBottom: 16
+  },
   amountLabel: { color: '#94a3b8', fontSize: 14, marginBottom: 8 },
   amountValue: { color: '#f8fafc', fontSize: 48, fontWeight: 'bold' },
-  balanceContainer: { backgroundColor: '#0f172a', borderRadius: 12, padding: 16, marginBottom: 24, gap: 12 },
+  balanceContainer: {
+    backgroundColor: '#0f172a', borderRadius: 12,
+    padding: 16, marginBottom: 24, gap: 12
+  },
   balanceRow: { flexDirection: 'row', justifyContent: 'space-between' },
   balanceLabel: { color: '#94a3b8', fontSize: 14 },
   balanceValue: { color: '#f8fafc', fontSize: 14, fontWeight: '600' },

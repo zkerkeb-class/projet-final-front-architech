@@ -9,8 +9,6 @@ import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
 import UserCard from '../components/UserCard';
 import { updateAccountMoney } from '../services/api';
-// UTXO layer
-import { getOrCreateIdentity, getBalance, createGenesis, preparePayment } from '../services/utxo';
 
 type TransactionStatus = 'idle' | 'connected' | 'entering_amount' | 'waiting' | 'done';
 
@@ -19,31 +17,17 @@ export default function VendorScreen() {
   const { user, setUser } = useUser();
   const [devices, setDevices] = useState<BluetoothDevice[]>([]);
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
-  const connectedDeviceRef = useRef<BluetoothDevice | null>(null);
+  const connectedDeviceRef = useRef<BluetoothDevice | null>(null); // ← added
   const [status, setStatus] = useState('Ready to scan for buyers');
   const [txStatus, setTxStatus] = useState<TransactionStatus>('idle');
   const [amountModalVisible, setAmountModalVisible] = useState(false);
   const [amount, setAmount] = useState('');
   const subscriptionRef = useRef<any>(null);
   const amountRef = useRef<number>(0);
-  // UTXO state
-  const [utxoBalance, setUtxoBalance] = useState(0);
-  const [myPub, setMyPub] = useState('');
 
   useEffect(() => {
-    const initUTXO = async () => {
-      const pub = await getOrCreateIdentity();
-      setMyPub(pub);
-      const bal = await getBalance(pub);
-      setUtxoBalance(bal);
-      // Si pas de fragments, convertir account_money en genesis
-      if (bal === 0 && user?.account_money && user.account_money > 0) {
-        await createGenesis(user.account_money, pub);
-        setUtxoBalance(user.account_money);
-      }
-    };
-    initUTXO();
     return () => {
+      // Only remove listener, don't disconnect on re-render
       if (subscriptionRef.current) subscriptionRef.current.remove();
     };
   }, []);
@@ -83,7 +67,7 @@ export default function VendorScreen() {
       });
       if (connected) {
         setConnectedDevice(device);
-        connectedDeviceRef.current = device;
+        connectedDeviceRef.current = device; // ← store in ref
         setTxStatus('connected');
         setStatus(`Connected to ${device.name}! Enter amount to charge.`);
 
@@ -102,6 +86,8 @@ export default function VendorScreen() {
 
     if (message === 'ACCEPTED') {
       const parsedAmount = amountRef.current;
+      console.log('💰 Amount to add:', parsedAmount);
+
       updateAccountMoney(user!.id, parsedAmount)
         .then(async () => {
           const { getUserById } = await import('../services/api');
@@ -110,9 +96,6 @@ export default function VendorScreen() {
           amountRef.current = 0;
         })
         .catch(err => console.error('Update error:', err));
-
-      // Refresh UTXO balance
-      getBalance(myPub).then(setUtxoBalance);
 
       setAmount('');
       setTxStatus('connected');
@@ -138,28 +121,16 @@ export default function VendorScreen() {
       Alert.alert('Erreur', 'Please enter a valid amount');
       return;
     }
-    if (!connectedDeviceRef.current) return;
+    if (!connectedDeviceRef.current) return; // ← use ref
 
-    // Préparer le fragment UTXO
-    const buyerPub = `buyer_${connectedDeviceRef.current.address}`;
-    const result = await preparePayment(myPub, buyerPub, parsedAmount);
-
-    if (!result) {
-      // Pas assez de fragments — fallback sur AMOUNT: classique
+    try {
       amountRef.current = parsedAmount;
-      await connectedDeviceRef.current.write(`AMOUNT:${parsedAmount}\n`);
-    } else {
-      // Envoyer le fragment via BLE
-      amountRef.current = parsedAmount;
-      const payload = `FRAGMENT:${JSON.stringify(result.fragmentToSend)}\n`;
-      await connectedDeviceRef.current.write(payload);
-      // Mettre à jour le solde UTXO local
-      const newBal = await getBalance(myPub);
-      setUtxoBalance(newBal);
+      await connectedDeviceRef.current.write(`AMOUNT:${parsedAmount}\n`); // ← use ref
+      setAmountModalVisible(false);
+      setTxStatus('waiting');
+    } catch (err: any) {
+      setStatus(`Sending error: ${err.message}`);
     }
-
-    setAmountModalVisible(false);
-    setTxStatus('waiting');
   };
 
   return (
@@ -178,12 +149,6 @@ export default function VendorScreen() {
       <Text style={styles.status}>Status: {status}</Text>
 
       <UserCard compact={true} />
-
-      {/* UTXO offline balance */}
-      <View style={styles.utxoCard}>
-        <Text style={styles.utxoLabel}>💎 Solde UTXO (offline)</Text>
-        <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
-      </View>
 
       {txStatus === 'idle' && (
         <TouchableOpacity style={styles.button} onPress={startScan}>
@@ -207,7 +172,9 @@ export default function VendorScreen() {
               <Text style={styles.deviceId}>{item.address}</Text>
             </TouchableOpacity>
           )}
-          ListEmptyComponent={<Text style={styles.empty}>No devices found yet...</Text>}
+          ListEmptyComponent={
+            <Text style={styles.empty}>No devices found yet...</Text>
+          }
         />
       )}
 
@@ -235,6 +202,7 @@ export default function VendorScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>💶 Billing amount</Text>
+
             <TextInput
               style={styles.modalInput}
               placeholder="0.00"
@@ -245,6 +213,7 @@ export default function VendorScreen() {
               autoFocus
             />
             <Text style={styles.modalCurrency}>€</Text>
+
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.cancelButton]}
@@ -252,6 +221,7 @@ export default function VendorScreen() {
               >
                 <Text style={styles.modalButtonText}>Cancel</Text>
               </TouchableOpacity>
+
               <TouchableOpacity
                 style={[styles.modalButton, styles.confirmButton]}
                 onPress={sendAmount}
@@ -273,28 +243,38 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
   status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
   back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
-  button: { backgroundColor: '#3b82f6', padding: 14, borderRadius: 10, alignItems: 'center', marginBottom: 16 },
+  button: {
+    backgroundColor: '#3b82f6', padding: 14,
+    borderRadius: 10, alignItems: 'center', marginBottom: 16
+  },
   chargeButton: { backgroundColor: '#10b981' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  deviceItem: { backgroundColor: '#1e293b', padding: 14, borderRadius: 8, marginBottom: 8 },
+  deviceItem: {
+    backgroundColor: '#1e293b', padding: 14,
+    borderRadius: 8, marginBottom: 8
+  },
   connectedDevice: { borderWidth: 2, borderColor: '#10b981' },
   deviceName: { color: '#f1f5f9', fontSize: 16 },
   deviceId: { color: '#64748b', fontSize: 11 },
   empty: { color: '#475569', textAlign: 'center', marginTop: 20 },
-  waitingContainer: { backgroundColor: '#1e293b', padding: 20, borderRadius: 12, alignItems: 'center', marginTop: 16 },
-  waitingText: { color: '#94a3b8', fontSize: 16 },
-  utxoCard: {
-    backgroundColor: '#1e293b', borderRadius: 12, padding: 14,
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 16,
-    borderWidth: 1, borderColor: '#10b981',
+  waitingContainer: {
+    backgroundColor: '#1e293b', padding: 20,
+    borderRadius: 12, alignItems: 'center', marginTop: 16
   },
-  utxoLabel: { color: '#94a3b8', fontSize: 13 },
-  utxoAmount: { color: '#10b981', fontSize: 20, fontWeight: 'bold' },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#1e293b', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 32, alignItems: 'center' },
+  waitingText: { color: '#94a3b8', fontSize: 16 },
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end'
+  },
+  modalContent: {
+    backgroundColor: '#1e293b', borderTopLeftRadius: 24,
+    borderTopRightRadius: 24, padding: 32, alignItems: 'center'
+  },
   modalTitle: { color: '#f8fafc', fontSize: 20, fontWeight: 'bold', marginBottom: 24 },
-  modalInput: { backgroundColor: '#0f172a', color: '#f8fafc', fontSize: 48, fontWeight: 'bold', textAlign: 'center', borderRadius: 12, padding: 16, width: '100%', marginBottom: 8 },
+  modalInput: {
+    backgroundColor: '#0f172a', color: '#f8fafc', fontSize: 48,
+    fontWeight: 'bold', textAlign: 'center', borderRadius: 12,
+    padding: 16, width: '100%', marginBottom: 8
+  },
   modalCurrency: { color: '#94a3b8', fontSize: 16, marginBottom: 32 },
   modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
   modalButton: { flex: 1, padding: 16, borderRadius: 12, alignItems: 'center' },
