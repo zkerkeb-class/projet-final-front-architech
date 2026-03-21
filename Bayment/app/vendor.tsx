@@ -2,35 +2,49 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
   StyleSheet, Platform, Alert, PermissionsAndroid,
-  TextInput, Modal
+  TextInput, Modal, StatusBar
 } from 'react-native';
 import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-classic';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUser } from '../context/UserContext';
 import UserCard from '../components/UserCard';
-import { updateAccountMoney } from '../services/api';
+import { updateAccountMoney, getUserById } from '../services/api';
+import { getOrCreateIdentity, getBalance, receiveFragment, Fragment } from '../services/utxo';
 
 type TransactionStatus = 'idle' | 'connected' | 'entering_amount' | 'waiting' | 'done';
 
 export default function VendorScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user, setUser } = useUser();
   const [devices, setDevices] = useState<BluetoothDevice[]>([]);
   const [connectedDevice, setConnectedDevice] = useState<BluetoothDevice | null>(null);
-  const connectedDeviceRef = useRef<BluetoothDevice | null>(null); // ← added
-  const [status, setStatus] = useState('Ready to scan for buyers');
+  const connectedDeviceRef = useRef<BluetoothDevice | null>(null);
+  const [status, setStatus] = useState('Prêt à scanner des acheteurs');
   const [txStatus, setTxStatus] = useState<TransactionStatus>('idle');
   const [amountModalVisible, setAmountModalVisible] = useState(false);
   const [amount, setAmount] = useState('');
   const subscriptionRef = useRef<any>(null);
   const amountRef = useRef<number>(0);
+  const [utxoBalance, setUtxoBalance] = useState(0);
+  const myPubRef = useRef('');
+  const initDoneRef = useRef(false);
 
   useEffect(() => {
+    if (!user || initDoneRef.current) return;
+    initDoneRef.current = true;
+    const initUTXO = async () => {
+      const pub = await getOrCreateIdentity();
+      myPubRef.current = pub;
+      const bal = await getBalance(pub);
+      setUtxoBalance(bal);
+    };
+    initUTXO();
     return () => {
-      // Only remove listener, don't disconnect on re-render
       if (subscriptionRef.current) subscriptionRef.current.remove();
     };
-  }, []);
+  }, [user]);
 
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
@@ -45,20 +59,20 @@ export default function VendorScreen() {
   const startScan = async () => {
     await requestPermissions();
     setDevices([]);
-    setStatus('Scanning...');
+    setStatus('Recherche en cours...');
     try {
       const paired = await RNBluetoothClassic.getBondedDevices();
       setDevices(paired);
       const unpaired = await RNBluetoothClassic.startDiscovery();
       setDevices(prev => [...prev, ...unpaired]);
-      setStatus('Scan complete — tap a device to connect');
+      setStatus('Scan terminé — Choisissez un appareil');
     } catch (err: any) {
-      setStatus(`Scan failed: ${err.message}`);
+      setStatus(`Échec du scan : ${err.message}`);
     }
   };
 
   const connectToDevice = async (device: BluetoothDevice) => {
-    setStatus('Connecting...');
+    setStatus('Connexion...');
     try {
       const connected = await device.connect({
         connectorType: 'rfcomm',
@@ -67,166 +81,188 @@ export default function VendorScreen() {
       });
       if (connected) {
         setConnectedDevice(device);
-        connectedDeviceRef.current = device; // ← store in ref
+        connectedDeviceRef.current = device;
         setTxStatus('connected');
-        setStatus(`Connected to ${device.name}! Enter amount to charge.`);
-
+        setStatus(`Connecté à ${device.name} !`);
         subscriptionRef.current = device.onDataReceived((data: any) => {
-          const message = data.data.trim();
-          handleBuyerResponse(message);
+          handleBuyerResponse(data.data.trim());
         });
       }
     } catch (err: any) {
-      setStatus(`Connection failed: ${err.message}`);
+      setStatus(`Échec de connexion : ${err.message}`);
     }
   };
 
-  const handleBuyerResponse = (message: string) => {
-    console.log('📨 Message received:', message);
+  const handleBuyerResponse = async (message: string) => {
+    // Buyer envoie un fragment UTXO — mode offline
+    if (message.startsWith('FRAGMENT:')) {
+      try {
+        const fragment: Fragment = JSON.parse(message.replace('FRAGMENT:', ''));
+        const accepted = await receiveFragment({ ...fragment, ownerPub: myPubRef.current });
+        if (accepted) {
+          const newBal = await getBalance(myPubRef.current);
+          setUtxoBalance(newBal);
+          // Online sync silencieux
+          try {
+            await updateAccountMoney(user!.id, fragment.value);
+            const updatedUser = await getUserById(user!.id);
+            setUser(updatedUser);
+          } catch {}
+          setTxStatus('connected');
+          setStatus(`Transaction réussie avec ${connectedDevice?.name}`);
+          Alert.alert('Paiement reçu !', `L'acheteur vous a versé ${fragment.value} € (offline)`);
+        } else {
+          Alert.alert('⚠️ Double spend', 'Ce fragment a déjà été utilisé.');
+          setTxStatus('connected');
+        }
+      } catch {
+        Alert.alert('Erreur', 'Fragment invalide reçu.');
+        setTxStatus('connected');
+      }
+      amountRef.current = 0;
+      setAmount('');
+      return;
+    }
 
+    // Buyer envoie ACCEPTED — mode en ligne classique
     if (message === 'ACCEPTED') {
       const parsedAmount = amountRef.current;
-      console.log('💰 Amount to add:', parsedAmount);
-
-      updateAccountMoney(user!.id, parsedAmount)
-        .then(async () => {
-          const { getUserById } = await import('../services/api');
-          const updatedUser = await getUserById(user!.id);
-          setUser(updatedUser);
-          amountRef.current = 0;
-        })
-        .catch(err => console.error('Update error:', err));
-
+      try {
+        await updateAccountMoney(user!.id, parsedAmount);
+        const updatedUser = await getUserById(user!.id);
+        setUser(updatedUser);
+      } catch {}
       setAmount('');
+      amountRef.current = 0;
       setTxStatus('connected');
-      Alert.alert('✅ Transaction accepted!', `Your client paid you ${parsedAmount} €`);
+      setStatus(`Transaction réussie avec ${connectedDevice?.name}`);
+      Alert.alert('Paiement reçu !', `L'acheteur vous a versé ${parsedAmount} €`);
 
     } else if (message === 'REFUSED') {
       setAmount('');
       amountRef.current = 0;
       setTxStatus('connected');
-      Alert.alert('❌ Cancelled', 'Your client cancelled the transaction.');
+      setStatus(`Transaction refusée par ${connectedDevice?.name}`);
+      Alert.alert('Annulé', "L'acheteur a refusé la transaction.");
 
     } else if (message === 'INSUFFICIENT') {
       setAmount('');
       amountRef.current = 0;
       setTxStatus('connected');
-      Alert.alert('❌ Insufficient', 'Your client cannot do this transaction.');
+      setStatus("Solde de l'acheteur insuffisant");
+      Alert.alert('Échec', "L'acheteur n'a pas les fonds nécessaires.");
     }
   };
 
   const sendAmount = async () => {
     const parsedAmount = parseFloat(amount);
     if (!parsedAmount || parsedAmount <= 0) {
-      Alert.alert('Erreur', 'Please enter a valid amount');
+      Alert.alert('Erreur', 'Veuillez entrer un montant valide');
       return;
     }
-    if (!connectedDeviceRef.current) return; // ← use ref
-
+    if (!connectedDeviceRef.current) return;
     try {
       amountRef.current = parsedAmount;
-      await connectedDeviceRef.current.write(`AMOUNT:${parsedAmount}\n`); // ← use ref
+      await connectedDeviceRef.current.write(`AMOUNT:${parsedAmount}\n`);
       setAmountModalVisible(false);
       setTxStatus('waiting');
     } catch (err: any) {
-      setStatus(`Sending error: ${err.message}`);
+      setStatus(`Erreur d'envoi : ${err.message}`);
     }
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top || 48 }]}>
+      <StatusBar barStyle="dark-content" />
+
       {user && (
         <View style={styles.header}>
           <Text style={styles.username}>👤 {user.username}</Text>
         </View>
       )}
 
-      <TouchableOpacity onPress={() => router.back()}>
-        <Text style={styles.back}>← Back</Text>
+      <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <Text style={styles.backText}>⇦ Retour</Text>
       </TouchableOpacity>
 
-      <Text style={styles.title}>🏪 Vendor Mode</Text>
-      <Text style={styles.status}>Status: {status}</Text>
+      <View style={styles.titleSection}>
+        <Text style={styles.title}>Mode Vendeur ↗</Text>
+        <Text style={styles.statusText}>{status}</Text>
+      </View>
 
       <UserCard compact={true} />
 
-      {txStatus === 'idle' && (
-        <TouchableOpacity style={styles.button} onPress={startScan}>
-          <Text style={styles.buttonText}>🔍 Scan for Buyers</Text>
-        </TouchableOpacity>
-      )}
+      {/* UTXO balance reçu */}
+      <View style={styles.utxoCard}>
+        <Text style={styles.utxoLabel}>💎 Reçu offline (UTXO)</Text>
+        <Text style={styles.utxoAmount}>{utxoBalance.toFixed(2)} €</Text>
+      </View>
 
       {txStatus === 'idle' && (
-        <FlatList
-          data={devices}
-          keyExtractor={(item) => item.address}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[
-                styles.deviceItem,
-                connectedDevice?.address === item.address && styles.connectedDevice
-              ]}
-              onPress={() => connectToDevice(item)}
-            >
-              <Text style={styles.deviceName}>{item.name || 'Unknown'}</Text>
-              <Text style={styles.deviceId}>{item.address}</Text>
-            </TouchableOpacity>
-          )}
-          ListEmptyComponent={
-            <Text style={styles.empty}>No devices found yet...</Text>
-          }
-        />
+        <>
+          <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={startScan}>
+            <Text style={styles.buttonText}>Scanner les acheteurs</Text>
+          </TouchableOpacity>
+
+          <FlatList
+            data={devices}
+            keyExtractor={(item) => item.address}
+            contentContainerStyle={styles.listContainer}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[styles.deviceItem, connectedDevice?.address === item.address && styles.connectedDevice]}
+                onPress={() => connectToDevice(item)}
+              >
+                <View>
+                  <Text style={styles.deviceName}>{item.name || 'Inconnu'}</Text>
+                  <Text style={styles.deviceId}>{item.address}</Text>
+                </View>
+                <Text style={styles.connectLabel}>Connecter</Text>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={<Text style={styles.empty}>Aucun appareil trouvé pour le moment...</Text>}
+          />
+        </>
       )}
 
       {txStatus === 'connected' && (
-        <TouchableOpacity
-          style={[styles.button, styles.chargeButton]}
-          onPress={() => setAmountModalVisible(true)}
-        >
-          <Text style={styles.buttonText}>💶 Enter the amount</Text>
-        </TouchableOpacity>
-      )}
-
-      {txStatus === 'waiting' && (
-        <View style={styles.waitingContainer}>
-          <Text style={styles.waitingText}>⏳ Waiting for buyer...</Text>
+        <View style={styles.actionSection}>
+          <TouchableOpacity style={[styles.button, styles.primaryButton]} onPress={() => setAmountModalVisible(true)}>
+            <Text style={styles.buttonText}>Encaisser un montant</Text>
+          </TouchableOpacity>
         </View>
       )}
 
-      <Modal
-        visible={amountModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setAmountModalVisible(false)}
-      >
+      {txStatus === 'waiting' && (
+        <View style={styles.waitingCard}>
+          <Text style={styles.waitingIcon}>⏳</Text>
+          <Text style={styles.waitingText}>En attente de validation par l'acheteur...</Text>
+        </View>
+      )}
+
+      <Modal visible={amountModalVisible} transparent animationType="slide" onRequestClose={() => setAmountModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>💶 Billing amount</Text>
-
-            <TextInput
-              style={styles.modalInput}
-              placeholder="0.00"
-              placeholderTextColor="#475569"
-              keyboardType="decimal-pad"
-              value={amount}
-              onChangeText={setAmount}
-              autoFocus
-            />
-            <Text style={styles.modalCurrency}>€</Text>
-
+            <View style={styles.modalIndicator} />
+            <Text style={styles.modalTitle}>💶 Montant à encaisser</Text>
+            <View style={styles.inputContainer}>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="0"
+                placeholderTextColor="#94A3B8"
+                keyboardType="decimal-pad"
+                value={amount}
+                onChangeText={setAmount}
+                autoFocus
+              />
+              <Text style={styles.modalCurrency}>€</Text>
+            </View>
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setAmountModalVisible(false)}
-              >
-                <Text style={styles.modalButtonText}>Cancel</Text>
+              <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => setAmountModalVisible(false)}>
+                <Text style={styles.cancelButtonText}>Annuler</Text>
               </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={sendAmount}
-              >
-                <Text style={styles.modalButtonText}>Send</Text>
+              <TouchableOpacity style={[styles.modalButton, styles.confirmButton]} onPress={sendAmount}>
+                <Text style={styles.confirmButtonText}>Envoyer la demande</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -237,48 +273,64 @@ export default function VendorScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 24, backgroundColor: '#0f172a' },
+  container: { flex: 1, padding: 24, backgroundColor: '#FAF9F6' },
   header: { position: 'absolute', top: 48, right: 24 },
-  username: { color: '#94a3b8', fontSize: 14, fontWeight: '600' },
-  title: { fontSize: 24, fontWeight: 'bold', color: '#f8fafc', marginBottom: 8, marginTop: 16 },
-  status: { fontSize: 14, color: '#94a3b8', marginBottom: 16 },
-  back: { color: '#3b82f6', fontSize: 16, marginBottom: 8 },
+  username: { color: '#64748B', fontSize: 14, fontWeight: '600' },
+  backButton: { marginBottom: 24 },
+  backText: { color: '#64748B', fontSize: 16, fontWeight: '600' },
+  titleSection: { marginBottom: 24 },
+  title: { fontSize: 32, fontWeight: '900', color: '#1E293B', letterSpacing: -1 },
+  statusText: { fontSize: 15, color: '#64748B', marginTop: 4, fontWeight: '500' },
+  utxoCard: {
+    backgroundColor: '#F0FDFA', borderRadius: 16, padding: 16,
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: 16,
+    borderWidth: 1, borderColor: '#CCFBF1',
+  },
+  utxoLabel: { color: '#0F766E', fontSize: 13, fontWeight: '600' },
+  utxoAmount: { color: '#0F766E', fontSize: 20, fontWeight: '800' },
+  listContainer: { paddingBottom: 24 },
   button: {
-    backgroundColor: '#3b82f6', padding: 14,
-    borderRadius: 10, alignItems: 'center', marginBottom: 16
+    padding: 20, borderRadius: 20, alignItems: 'center', marginBottom: 24,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1, shadowRadius: 10, elevation: 3,
   },
-  chargeButton: { backgroundColor: '#10b981' },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  primaryButton: { backgroundColor: '#14B8A6' },
+  buttonText: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
   deviceItem: {
-    backgroundColor: '#1e293b', padding: 14,
-    borderRadius: 8, marginBottom: 8
+    backgroundColor: '#FFFFFF', padding: 20, borderRadius: 20, marginBottom: 12,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    borderWidth: 1, borderColor: '#F1F5F9',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05, shadowRadius: 8, elevation: 2,
   },
-  connectedDevice: { borderWidth: 2, borderColor: '#10b981' },
-  deviceName: { color: '#f1f5f9', fontSize: 16 },
-  deviceId: { color: '#64748b', fontSize: 11 },
-  empty: { color: '#475569', textAlign: 'center', marginTop: 20 },
-  waitingContainer: {
-    backgroundColor: '#1e293b', padding: 20,
-    borderRadius: 12, alignItems: 'center', marginTop: 16
+  connectedDevice: { borderColor: '#14B8A6', borderWidth: 2 },
+  deviceName: { color: '#1E293B', fontSize: 17, fontWeight: '700' },
+  deviceId: { color: '#94A3B8', fontSize: 12, marginTop: 2 },
+  connectLabel: { color: '#14B8A6', fontWeight: '700', fontSize: 14 },
+  empty: { color: '#94A3B8', textAlign: 'center', marginTop: 40, fontSize: 15 },
+  actionSection: { marginTop: 'auto', marginBottom: 24 },
+  waitingCard: {
+    backgroundColor: '#FFFFFF', padding: 40, borderRadius: 28,
+    alignItems: 'center', marginTop: 24,
+    borderWidth: 1, borderColor: '#F1F5F9',
   },
-  waitingText: { color: '#94a3b8', fontSize: 16 },
-  modalOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end'
-  },
+  waitingIcon: { fontSize: 48, marginBottom: 16 },
+  waitingText: { color: '#64748B', fontSize: 16, textAlign: 'center', fontWeight: '600' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.4)', justifyContent: 'flex-end' },
   modalContent: {
-    backgroundColor: '#1e293b', borderTopLeftRadius: 24,
-    borderTopRightRadius: 24, padding: 32, alignItems: 'center'
+    backgroundColor: '#FFFFFF', borderTopLeftRadius: 32,
+    borderTopRightRadius: 32, padding: 32, paddingTop: 12, alignItems: 'center'
   },
-  modalTitle: { color: '#f8fafc', fontSize: 20, fontWeight: 'bold', marginBottom: 24 },
-  modalInput: {
-    backgroundColor: '#0f172a', color: '#f8fafc', fontSize: 48,
-    fontWeight: 'bold', textAlign: 'center', borderRadius: 12,
-    padding: 16, width: '100%', marginBottom: 8
-  },
-  modalCurrency: { color: '#94a3b8', fontSize: 16, marginBottom: 32 },
+  modalIndicator: { width: 40, height: 4, backgroundColor: '#E2E8F0', borderRadius: 2, marginBottom: 28 },
+  modalTitle: { color: '#1E293B', fontSize: 22, fontWeight: '800', marginBottom: 32 },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 40 },
+  modalInput: { color: '#1E293B', fontSize: 56, fontWeight: '800', textAlign: 'center', padding: 0 },
+  modalCurrency: { color: '#94A3B8', fontSize: 32, fontWeight: '600', marginLeft: 8 },
   modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
-  modalButton: { flex: 1, padding: 16, borderRadius: 12, alignItems: 'center' },
-  cancelButton: { backgroundColor: '#334155' },
-  confirmButton: { backgroundColor: '#10b981' },
-  modalButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  modalButton: { flex: 1, padding: 18, borderRadius: 20, alignItems: 'center' },
+  cancelButton: { backgroundColor: '#F1F5F9' },
+  confirmButton: { backgroundColor: '#14B8A6' },
+  cancelButtonText: { color: '#64748B', fontSize: 16, fontWeight: '800' },
+  confirmButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
 });
