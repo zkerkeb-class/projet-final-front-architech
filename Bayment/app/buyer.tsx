@@ -21,20 +21,24 @@ export default function BuyerScreen() {
   const [pendingFragment, setPendingFragment] = useState<Fragment | null>(null);
   const subscriptionRef = useRef<any>(null);
   const [utxoBalance, setUtxoBalance] = useState(0);
-  const [myPub, setMyPub] = useState('');
   const myPubRef = useRef('');
+  const initDoneRef = useRef(false);
 
+  // Init UTXO — dépend de user
   useEffect(() => {
+    if (!user || initDoneRef.current) return;
+    initDoneRef.current = true;
+
     const initUTXO = async () => {
       const pub = await getOrCreateIdentity();
-      setMyPub(pub);
       myPubRef.current = pub;
       const bal = await getBalance(pub);
       setUtxoBalance(bal);
     };
     initUTXO();
+
     return () => stopListening();
-  }, []);
+  }, [user]);
 
   const startListening = async () => {
     try {
@@ -48,10 +52,8 @@ export default function BuyerScreen() {
       if (device) {
         setConnectedDevice(device);
         setStatus(`Connected to ${device.name}! Waiting for payment request...`);
-
         subscriptionRef.current = device.onDataReceived((data: any) => {
-          const message = data.data.trim();
-          handleVendorMessage(message, device);
+          handleVendorMessage(data.data.trim(), device);
         });
       }
     } catch (err: any) {
@@ -103,7 +105,7 @@ export default function BuyerScreen() {
     try {
       await connectedDevice?.write('ACCEPTED\n');
 
-      // UTXO — remplace ownerPub par myPub pour que getBalance fonctionne
+      // UTXO — stocker le fragment avec notre propre pub
       if (pendingFragment) {
         const fragmentWithMyPub = { ...pendingFragment, ownerPub: myPubRef.current };
         const accepted = await receiveFragment(fragmentWithMyPub);
@@ -123,7 +125,7 @@ export default function BuyerScreen() {
       } catch {}
 
       setStatus('📡 Waiting for vendor connection...');
-      Alert.alert('✅ Transaction accepted!', `${pendingAmount} € debited. UTXO balance updated.`);
+      Alert.alert('✅ Transaction accepted!', `${pendingAmount} € received. UTXO balance updated.`);
       setPendingFragment(null);
     } catch (err: any) {
       Alert.alert('Erreur', err.message);
@@ -191,18 +193,16 @@ export default function BuyerScreen() {
 
             <View style={styles.balanceContainer}>
               <View style={styles.balanceRow}>
-                <Text style={styles.balanceLabel}>Current balance</Text>
+                <Text style={styles.balanceLabel}>Current online balance</Text>
                 <Text style={styles.balanceValue}>{user?.account_money} €</Text>
               </View>
               <View style={styles.balanceRow}>
-                <Text style={styles.balanceLabel}>Balance after payment</Text>
-                <Text style={[styles.balanceValue, styles.balanceAfter]}>
-                  {(user?.account_money ?? 0) - pendingAmount} €
-                </Text>
+                <Text style={styles.balanceLabel}>Current UTXO balance</Text>
+                <Text style={[styles.balanceValue, { color: '#8b5cf6' }]}>{utxoBalance.toFixed(2)} €</Text>
               </View>
               <View style={styles.balanceRow}>
-                <Text style={styles.balanceLabel}>UTXO after</Text>
-                <Text style={[styles.balanceValue, { color: '#8b5cf6' }]}>
+                <Text style={styles.balanceLabel}>UTXO after receipt</Text>
+                <Text style={[styles.balanceValue, { color: '#10b981' }]}>
                   {(utxoBalance + pendingAmount).toFixed(2)} €
                 </Text>
               </View>
@@ -260,7 +260,6 @@ const styles = StyleSheet.create({
   balanceRow: { flexDirection: 'row', justifyContent: 'space-between' },
   balanceLabel: { color: '#94a3b8', fontSize: 14 },
   balanceValue: { color: '#f8fafc', fontSize: 14, fontWeight: '600' },
-  balanceAfter: { color: '#ef4444' },
   modalButtons: { flexDirection: 'row', gap: 12 },
   modalButton: { flex: 1, padding: 16, borderRadius: 12, alignItems: 'center' },
   refuseButton: { backgroundColor: '#ef4444' },

@@ -8,7 +8,7 @@ import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-clas
 import { useRouter } from 'expo-router';
 import { useUser } from '../context/UserContext';
 import UserCard from '../components/UserCard';
-import { updateAccountMoney } from '../services/api';
+import { updateAccountMoney, getUserById } from '../services/api';
 import { getOrCreateIdentity, getBalance, createGenesis, preparePayment } from '../services/utxo';
 
 type TransactionStatus = 'idle' | 'connected' | 'entering_amount' | 'waiting' | 'done';
@@ -26,33 +26,58 @@ export default function VendorScreen() {
   const subscriptionRef = useRef<any>(null);
   const amountRef = useRef<number>(0);
   const [utxoBalance, setUtxoBalance] = useState(0);
-  const [myPub, setMyPub] = useState('');
   const myPubRef = useRef('');
+  const initDoneRef = useRef(false);
 
+  // Init UTXO — dépend de user pour garantir que account_money est disponible
   useEffect(() => {
+    if (!user || initDoneRef.current) return;
+    initDoneRef.current = true;
+
     const initUTXO = async () => {
       const pub = await getOrCreateIdentity();
-      setMyPub(pub);
       myPubRef.current = pub;
       const bal = await getBalance(pub);
       setUtxoBalance(bal);
     };
     initUTXO();
+
     return () => {
       if (subscriptionRef.current) subscriptionRef.current.remove();
     };
-  }, []);
+  }, [user]);
 
   const handleRecharge = async () => {
-    const amount = user?.account_money ?? 0;
-    if (amount <= 0) {
+    const onlineAmount = user?.account_money ?? 0;
+    if (onlineAmount <= 0) {
       Alert.alert('Solde vide', "Ajoutez d'abord de l'argent en ligne via UserCard.");
       return;
     }
-    await createGenesis(amount, myPubRef.current);
-    const newBal = await getBalance(myPubRef.current);
-    setUtxoBalance(newBal);
-    Alert.alert('✅ Rechargé', `${amount} € chargés dans votre wallet offline.`);
+
+    const currentUtxo = await getBalance(myPubRef.current);
+    if (currentUtxo > 0) {
+      Alert.alert(
+        'Wallet déjà chargé',
+        `Vous avez déjà ${currentUtxo.toFixed(2)} € offline. Dépensez-les d'abord.`
+      );
+      return;
+    }
+
+    try {
+      // Déduire du compte en ligne
+      await updateAccountMoney(user!.id, -onlineAmount);
+      const updatedUser = await getUserById(user!.id);
+      setUser(updatedUser);
+
+      // Créer le genesis fragment
+      await createGenesis(onlineAmount, myPubRef.current);
+      const newBal = await getBalance(myPubRef.current);
+      setUtxoBalance(newBal);
+
+      Alert.alert('✅ Rechargé', `${onlineAmount} € transférés dans votre wallet offline.`);
+    } catch {
+      Alert.alert('Erreur', 'Recharge impossible — vérifiez votre connexion.');
+    }
   };
 
   const requestPermissions = async () => {
@@ -93,10 +118,8 @@ export default function VendorScreen() {
         connectedDeviceRef.current = device;
         setTxStatus('connected');
         setStatus(`Connected to ${device.name}! Enter amount to charge.`);
-
         subscriptionRef.current = device.onDataReceived((data: any) => {
-          const message = data.data.trim();
-          handleBuyerResponse(message);
+          handleBuyerResponse(data.data.trim());
         });
       }
     } catch (err: any) {
@@ -105,34 +128,20 @@ export default function VendorScreen() {
   };
 
   const handleBuyerResponse = (message: string) => {
-    console.log('📨 Message received:', message);
-
     if (message === 'ACCEPTED') {
       const parsedAmount = amountRef.current;
-
-      // Online sync — silencieux si pas de réseau
-      try {
-        updateAccountMoney(user!.id, parsedAmount)
-          .then(async () => {
-            const { getUserById } = await import('../services/api');
-            const updatedUser = await getUserById(user!.id);
-            setUser(updatedUser);
-          })
-          .catch(() => {});
-      } catch {}
-
+      // Refresh UTXO (déjà déduit dans sendAmount)
       getBalance(myPubRef.current).then(setUtxoBalance);
       setAmount('');
       amountRef.current = 0;
       setTxStatus('connected');
       Alert.alert('✅ Transaction accepted!', `Your client paid you ${parsedAmount} €`);
-
     } else if (message === 'REFUSED') {
+      // Rembourser les fragments si refus
       setAmount('');
       amountRef.current = 0;
       setTxStatus('connected');
       Alert.alert('❌ Cancelled', 'Your client cancelled the transaction.');
-
     } else if (message === 'INSUFFICIENT') {
       setAmount('');
       amountRef.current = 0;
@@ -149,16 +158,27 @@ export default function VendorScreen() {
     }
     if (!connectedDeviceRef.current) return;
 
+    const currentBal = await getBalance(myPubRef.current);
+    if (currentBal < parsedAmount) {
+      Alert.alert(
+        'Solde UTXO insuffisant',
+        `Vous avez ${currentBal.toFixed(2)} € offline. Rechargez votre wallet.`
+      );
+      return;
+    }
+
     const buyerPub = `buyer_${connectedDeviceRef.current.address}`;
     const result = await preparePayment(myPubRef.current, buyerPub, parsedAmount);
 
     if (!result) {
+      // Fallback — ne devrait pas arriver vu le check ci-dessus
       amountRef.current = parsedAmount;
       await connectedDeviceRef.current.write(`AMOUNT:${parsedAmount}\n`);
     } else {
       amountRef.current = parsedAmount;
       const payload = `FRAGMENT:${JSON.stringify(result.fragmentToSend)}\n`;
       await connectedDeviceRef.current.write(payload);
+      // Solde déjà déduit par preparePayment
       const newBal = await getBalance(myPubRef.current);
       setUtxoBalance(newBal);
     }
@@ -283,10 +303,7 @@ const styles = StyleSheet.create({
   },
   utxoLabel: { color: '#94a3b8', fontSize: 13, marginBottom: 4 },
   utxoAmount: { color: '#10b981', fontSize: 20, fontWeight: 'bold' },
-  rechargeBtn: {
-    backgroundColor: '#10b981', paddingVertical: 8,
-    paddingHorizontal: 14, borderRadius: 8,
-  },
+  rechargeBtn: { backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 8 },
   rechargeBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: '#1e293b', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 32, alignItems: 'center' },
